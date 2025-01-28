@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note
 /*
  *
- * (C) COPYRIGHT 2019-2021 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2019-2022 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
@@ -66,7 +66,7 @@ void kbase_gpu_report_bus_fault_and_kill(struct kbase_context *kctx,
 
 	/* terminal fault, print info about the fault */
 	dev_err(kbdev->dev,
-		"GPU bus fault in AS%d at VA 0x%016llX\n"
+		"GPU bus fault in AS%d at PA 0x%016llX\n"
 		"raw fault status: 0x%X\n"
 		"exception type 0x%X: %s\n"
 		"exception data 0x%X\n"
@@ -94,6 +94,7 @@ void kbase_gpu_report_bus_fault_and_kill(struct kbase_context *kctx,
 				 KBASE_MMU_FAULT_TYPE_BUS_UNEXPECTED);
 	kbase_mmu_hw_enable_fault(kbdev, as,
 				 KBASE_MMU_FAULT_TYPE_BUS_UNEXPECTED);
+
 }
 
 /*
@@ -185,6 +186,7 @@ void kbase_mmu_report_fault_and_kill(struct kbase_context *kctx,
 			KBASE_MMU_FAULT_TYPE_PAGE_UNEXPECTED);
 	kbase_mmu_hw_enable_fault(kbdev, as,
 			KBASE_MMU_FAULT_TYPE_PAGE_UNEXPECTED);
+
 }
 
 /**
@@ -240,13 +242,13 @@ static void kbase_mmu_interrupt_process(struct kbase_device *kbdev,
 		 * hw counters dumping in progress, signal the
 		 * other thread that it failed
 		 */
-  		spin_lock_irqsave(&kbdev->hwcnt.lock, flags);
+		spin_lock_irqsave(&kbdev->hwcnt.lock, flags);
 		if ((kbdev->hwcnt.kctx == kctx) &&
 		    (kbdev->hwcnt.backend.state ==
 					KBASE_INSTR_STATE_DUMPING))
-			kbdev->hwcnt.backend.state =
-						KBASE_INSTR_STATE_FAULT;
-  		spin_unlock_irqrestore(&kbdev->hwcnt.lock, flags);
+			kbdev->hwcnt.backend.state = KBASE_INSTR_STATE_FAULT;
+
+		spin_unlock_irqrestore(&kbdev->hwcnt.lock, flags);
 
 		/*
 		 * Stop the kctx from submitting more jobs and cause it
@@ -326,7 +328,7 @@ void kbase_mmu_interrupt(struct kbase_device *kbdev, u32 irq_stat)
 
 	while (bf_bits | pf_bits) {
 		struct kbase_as *as;
-		int as_no;
+		unsigned int as_no;
 		struct kbase_context *kctx;
 		struct kbase_fault *fault;
 
@@ -421,13 +423,13 @@ int kbase_mmu_switch_to_ir(struct kbase_context *const kctx,
 	return kbase_job_slot_softstop_start_rp(kctx, reg);
 }
 
-int kbase_mmu_as_init(struct kbase_device *kbdev, int i)
+int kbase_mmu_as_init(struct kbase_device *kbdev, unsigned int i)
 {
 	kbdev->as[i].number = i;
 	kbdev->as[i].bf_data.addr = 0ULL;
 	kbdev->as[i].pf_data.addr = 0ULL;
 
-	kbdev->as[i].pf_wq = alloc_workqueue("mali_mmu%d", 0, 1, i);
+	kbdev->as[i].pf_wq = alloc_workqueue("mali_mmu%u", 0, 1, i);
 	if (!kbdev->as[i].pf_wq)
 		return -ENOMEM;
 

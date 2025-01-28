@@ -28,12 +28,41 @@
 		compatible = "pwm-fan";
 		#cooling-cells = <2>;
 		pwms = <&pwm9 0 50000 0>;
+		cooling-levels = <0 50 100 150 200 255>;
+		rockchip,temp-trips = <
+			50000	1
+			55000	2
+			60000	3
+			65000	4
+			70000	5
+		>;
+	};
+
+	hdmiin_dc: hdmiin-dc {
+		compatible = "rockchip,dummy-codec";
+		#sound-dai-cells = <0>;
+	};
+
+	hdmiin-sound {
+		compatible = "simple-audio-card";
+		simple-audio-card,format = "i2s";
+		simple-audio-card,name = "rockchip,hdmiin";
+		simple-audio-card,bitclock-master = <&dailink0_master>;
+		simple-audio-card,frame-master = <&dailink0_master>;
+		status = "okay";
+		simple-audio-card,cpu {
+			sound-dai = <&i2s7_8ch>;
+		};
+		dailink0_master: simple-audio-card,codec {
+			sound-dai = <&hdmiin_dc>;
+		};
 	};
 
 	pcie20_avdd0v85: pcie20-avdd0v85 {
 		compatible = "regulator-fixed";
 		regulator-name = "pcie20_avdd0v85";
 		regulator-boot-on;
+		regulator-always-on;
 		regulator-min-microvolt = <850000>;
 		regulator-max-microvolt = <850000>;
 		vin-supply = <&avdd_0v85_s0>;
@@ -43,6 +72,7 @@
 		compatible = "regulator-fixed";
 		regulator-name = "pcie20_avdd1v8";
 		regulator-boot-on;
+		regulator-always-on;
 		regulator-min-microvolt = <1800000>;
 		regulator-max-microvolt = <1800000>;
 		vin-supply = <&avcc_1v8_s0>;
@@ -52,6 +82,7 @@
 		compatible = "regulator-fixed";
 		regulator-name = "pcie30_avdd0v75";
 		regulator-boot-on;
+		regulator-always-on;
 		regulator-min-microvolt = <750000>;
 		regulator-max-microvolt = <750000>;
 		vin-supply = <&avdd_0v75_s0>;
@@ -61,6 +92,7 @@
 		compatible = "regulator-fixed";
 		regulator-name = "pcie30_avdd1v8";
 		regulator-boot-on;
+		regulator-always-on;
 		regulator-min-microvolt = <1800000>;
 		regulator-max-microvolt = <1800000>;
 		vin-supply = <&avcc_1v8_s0>;
@@ -153,6 +185,10 @@
 	status = "okay";
 };
 
+&i2s7_8ch {
+	status = "okay";
+};
+
 &mipi_dcphy0 {
 	status = "disabled";
 };
@@ -200,6 +236,16 @@
 &pwm9 {
 	pinctrl-0 = <&pwm9m2_pins>;
 	status = "okay";
+};
+
+&route_dsi0 {
+	status = "okay";
+	connect = <&vp3_out_dsi0>;
+};
+
+&route_dsi1 {
+	status = "disabled";
+	connect = <&vp3_out_dsi1>;
 };
 
 &spdif_tx1 {

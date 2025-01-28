@@ -9,7 +9,11 @@
 #include <linux/types.h>
 #include <linux/v4l2-controls.h>
 
-#define RKCIF_API_VERSION		KERNEL_VERSION(0, 1, 0xa)
+#define RKCIF_MAX_CSI_NUM		4
+
+#define RKCIF_API_VERSION		KERNEL_VERSION(0, 2, 0)
+
+#define V4L2_EVENT_RESET_DEV		0X1001
 
 #define RKCIF_CMD_GET_CSI_MEMORY_MODE \
 	_IOR('V', BASE_VIDIOC_PRIVATE + 0, int)
@@ -22,6 +26,21 @@
 
 #define RKCIF_CMD_SET_SCALE_BLC \
 	_IOW('V', BASE_VIDIOC_PRIVATE + 3, struct bayer_blc)
+
+#define RKCIF_CMD_SET_FPS \
+	_IOW('V', BASE_VIDIOC_PRIVATE + 4, struct rkcif_fps)
+
+#define RKCIF_CMD_SET_RESET \
+	_IOW('V', BASE_VIDIOC_PRIVATE + 6, int)
+
+#define RKCIF_CMD_SET_CSI_IDX \
+	_IOW('V', BASE_VIDIOC_PRIVATE + 7, struct rkcif_csi_info)
+
+#define RKCIF_CMD_SET_QUICK_STREAM \
+	_IOWR('V', BASE_VIDIOC_PRIVATE + 8, struct rkcif_quick_stream_param)
+
+#define RKCIF_CMD_START_CAPTURE_ONE_FRAME_AOV \
+	_IOW('V', BASE_VIDIOC_PRIVATE + 9, int)
 
 /* cif memory mode
  * 0: raw12/raw10/raw8 8bit memory compact
@@ -54,4 +73,22 @@ struct bayer_blc {
 	u8 pattern02;
 	u8 pattern03;
 };
+
+struct rkcif_fps {
+	int ch_num;
+	int fps;
+};
+
+struct rkcif_csi_info {
+	int csi_num;
+	int csi_idx[RKCIF_MAX_CSI_NUM];
+	int dphy_vendor[RKCIF_MAX_CSI_NUM];
+};
+
+struct rkcif_quick_stream_param {
+	int on;
+	__u32 frame_num;
+	int resume_mode;
+};
+
 #endif

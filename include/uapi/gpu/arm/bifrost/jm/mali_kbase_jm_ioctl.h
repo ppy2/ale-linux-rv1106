@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 /*
  *
- * (C) COPYRIGHT 2020-2021 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2020-2022 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
@@ -119,9 +119,31 @@
  * 11.31:
  * - Added BASE_JD_REQ_LIMITED_CORE_MASK.
  * - Added ioctl 55: set_limited_core_count.
+ * 11.32:
+ * - Added new HW performance counters interface to all GPUs.
+ * 11.33:
+ * - Removed Kernel legacy HWC interface
+ * 11.34:
+ * - First release of new HW performance counters interface.
+ * 11.35:
+ * - Dummy model (no mali) backend will now clear HWC values after each sample
+ * 11.36:
+ * - Remove legacy definitions:
+ *   - base_jit_alloc_info_10_2
+ *   - base_jit_alloc_info_11_5
+ *   - kbase_ioctl_mem_jit_init_10_2
+ *   - kbase_ioctl_mem_jit_init_11_5
+ * 11.37:
+ * - Fix kinstr_prfcnt issues:
+ *   - Missing implicit sample for CMD_STOP when HWCNT buffer is full.
+ *   - Race condition when stopping periodic sampling.
+ *   - prfcnt_block_metadata::block_idx gaps.
+ *   - PRFCNT_CONTROL_CMD_SAMPLE_ASYNC is removed.
+ * 11.38:
+ * - CPU mappings of USER_BUFFER imported memory handles must be cached.
  */
 #define BASE_UK_VERSION_MAJOR 11
-#define BASE_UK_VERSION_MINOR 31
+#define BASE_UK_VERSION_MINOR 37
 
 /**
  * struct kbase_ioctl_version_check - Check version compatibility between

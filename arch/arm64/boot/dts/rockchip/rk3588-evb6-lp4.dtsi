@@ -14,6 +14,7 @@
 		compatible = "regulator-fixed";
 		regulator-name = "pcie20_avdd0v85";
 		regulator-boot-on;
+		regulator-always-on;
 		regulator-min-microvolt = <850000>;
 		regulator-max-microvolt = <850000>;
 		vin-supply = <&avdd_0v85_s0>;
@@ -23,6 +24,7 @@
 		compatible = "regulator-fixed";
 		regulator-name = "pcie20_avdd1v8";
 		regulator-boot-on;
+		regulator-always-on;
 		regulator-min-microvolt = <1800000>;
 		regulator-max-microvolt = <1800000>;
 		vin-supply = <&avcc_1v8_s0>;
@@ -32,6 +34,7 @@
 		compatible = "regulator-fixed";
 		regulator-name = "pcie30_avdd0v75";
 		regulator-boot-on;
+		regulator-always-on;
 		regulator-min-microvolt = <750000>;
 		regulator-max-microvolt = <750000>;
 		vin-supply = <&avdd_0v75_s0>;
@@ -41,6 +44,7 @@
 		compatible = "regulator-fixed";
 		regulator-name = "pcie30_avdd1v8";
 		regulator-boot-on;
+		regulator-always-on;
 		regulator-min-microvolt = <1800000>;
 		regulator-max-microvolt = <1800000>;
 		vin-supply = <&avcc_1v8_s0>;
@@ -322,6 +326,7 @@
 		pinctrl-0 = <&hym8563_int>;
 		interrupt-parent = <&gpio0>;
 		interrupts = <RK_PD4 IRQ_TYPE_LEVEL_LOW>;
+		wakeup-source;
 	};
 };
 
@@ -411,7 +416,7 @@
 		touch_gpio: touch-gpio {
 			rockchip,pins =
 				<0 RK_PD2 RK_FUNC_GPIO &pcfg_pull_up>,
-				<0 RK_PD3 RK_FUNC_GPIO &pcfg_pull_none>;
+				<0 RK_PD3 RK_FUNC_GPIO &pcfg_pull_up>;
 		};
 	};
 
@@ -436,8 +441,22 @@
 	status = "okay";
 };
 
+&route_dsi0 {
+	status = "okay";
+	connect = <&vp3_out_dsi0>;
+};
+
+&route_dsi1 {
+	status = "disabled";
+	connect = <&vp3_out_dsi1>;
+};
+
 &sata0 {
 	status = "okay";
+};
+
+&u2phy0_otg {
+	rockchip,typec-vbus-det;
 };
 
 &u2phy1_otg {

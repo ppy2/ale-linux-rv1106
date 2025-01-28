@@ -341,6 +341,7 @@
 #define DATA_DATA							\
 	*(.xiptext)							\
 	*(DATA_MAIN)							\
+	*(.data..decrypted)						\
 	*(.ref.data)							\
 	*(.data..shared_aligned) /* percpu related */			\
 	MEM_KEEP(init.data*)						\
@@ -963,6 +964,7 @@
 #define INIT_CALLS_LEVEL(level)						\
 		__initcall##level##_start = .;				\
 		KEEP(*(.initcall##level##.init))			\
+		__initcall##level##s_start = .;				\
 		KEEP(*(.initcall##level##s.init))			\
 
 #define INIT_CALLS							\
@@ -1013,7 +1015,6 @@
 #ifdef CONFIG_AMD_MEM_ENCRYPT
 #define PERCPU_DECRYPTED_SECTION					\
 	. = ALIGN(PAGE_SIZE);						\
-	*(.data..decrypted)						\
 	*(.data..percpu..decrypted)					\
 	. = ALIGN(PAGE_SIZE);
 #else

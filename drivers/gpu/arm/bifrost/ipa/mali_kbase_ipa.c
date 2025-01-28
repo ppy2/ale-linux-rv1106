@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note
 /*
  *
- * (C) COPYRIGHT 2016-2021 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2016-2022 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
@@ -71,7 +71,7 @@ KBASE_EXPORT_TEST_API(kbase_ipa_model_ops_find);
 
 const char *kbase_ipa_model_name_from_id(u32 gpu_id)
 {
-	const char* model_name =
+	const char *model_name =
 		kbase_ipa_counter_model_name_from_id(gpu_id);
 
 	if (!model_name)
@@ -84,11 +84,11 @@ KBASE_EXPORT_TEST_API(kbase_ipa_model_name_from_id);
 static struct device_node *get_model_dt_node(struct kbase_ipa_model *model,
 					     bool dt_required)
 {
-	struct device_node *model_dt_node;
+	struct device_node *model_dt_node = NULL;
 	char compat_string[64];
 
-	snprintf(compat_string, sizeof(compat_string), "arm,%s",
-		 model->ops->name);
+	if (unlikely(!scnprintf(compat_string, sizeof(compat_string), "arm,%s", model->ops->name)))
+		return NULL;
 
 	/* of_find_compatible_node() will call of_node_put() on the root node,
 	 * so take a reference on it first.
@@ -111,12 +111,12 @@ int kbase_ipa_model_add_param_s32(struct kbase_ipa_model *model,
 				  const char *name, s32 *addr,
 				  size_t num_elems, bool dt_required)
 {
-	int err, i;
+	int err = -EINVAL, i;
 	struct device_node *model_dt_node = get_model_dt_node(model,
 								dt_required);
 	char *origin;
 
-	err = of_property_read_u32_array(model_dt_node, name, addr, num_elems);
+	err = of_property_read_u32_array(model_dt_node, name, (u32 *)addr, num_elems);
 	/* We're done with model_dt_node now, so drop the reference taken in
 	 * get_model_dt_node()/of_find_compatible_node().
 	 */
@@ -138,11 +138,17 @@ int kbase_ipa_model_add_param_s32(struct kbase_ipa_model *model,
 	for (i = 0; i < num_elems; ++i) {
 		char elem_name[32];
 
-		if (num_elems == 1)
-			snprintf(elem_name, sizeof(elem_name), "%s", name);
-		else
-			snprintf(elem_name, sizeof(elem_name), "%s.%d",
-				name, i);
+		if (num_elems == 1) {
+			if (unlikely(!scnprintf(elem_name, sizeof(elem_name), "%s", name))) {
+				err = -ENOMEM;
+				goto exit;
+			}
+		} else {
+			if (unlikely(!scnprintf(elem_name, sizeof(elem_name), "%s.%d", name, i))) {
+				err = -ENOMEM;
+				goto exit;
+			}
+		}
 
 		dev_dbg(model->kbdev->dev, "%s.%s = %d (%s)\n",
 			model->ops->name, elem_name, addr[i], origin);
@@ -164,7 +170,7 @@ int kbase_ipa_model_add_param_string(struct kbase_ipa_model *model,
 	int err;
 	struct device_node *model_dt_node = get_model_dt_node(model,
 								dt_required);
-	const char *string_prop_value;
+	const char *string_prop_value = "";
 	char *origin;
 
 	err = of_property_read_string(model_dt_node, name,
@@ -324,7 +330,7 @@ int kbase_ipa_init(struct kbase_device *kbdev)
 		kbdev->ipa.configured_model = default_model;
 	}
 
-	kbdev->ipa.last_sample_time = ktime_get();
+	kbdev->ipa.last_sample_time = ktime_get_raw();
 
 end:
 	if (err)
@@ -537,11 +543,26 @@ static void opp_translate_freq_voltage(struct kbase_device *kbdev,
 				       unsigned long *freqs,
 				       unsigned long *volts)
 {
+#if IS_ENABLED(CONFIG_MALI_BIFROST_NO_MALI)
+	/* An arbitrary voltage and frequency value can be chosen for testing
+	 * in no mali configuration which may not match with any OPP level.
+	 */
+	freqs[KBASE_IPA_BLOCK_TYPE_TOP_LEVEL] = nominal_freq;
+	volts[KBASE_IPA_BLOCK_TYPE_TOP_LEVEL] = nominal_voltage;
+
+	freqs[KBASE_IPA_BLOCK_TYPE_SHADER_CORES] = nominal_freq;
+	volts[KBASE_IPA_BLOCK_TYPE_SHADER_CORES] = nominal_voltage;
+#else
 	u64 core_mask;
+	unsigned int i;
 
 	kbase_devfreq_opp_translate(kbdev, nominal_freq, &core_mask,
 				    freqs, volts);
 	CSTD_UNUSED(core_mask);
+
+	/* Convert micro volts to milli volts */
+	for (i = 0; i < kbdev->nr_clocks; i++)
+		volts[i] /= 1000;
 
 	if (kbdev->nr_clocks == 1) {
 		freqs[KBASE_IPA_BLOCK_TYPE_SHADER_CORES] =
@@ -549,6 +570,7 @@ static void opp_translate_freq_voltage(struct kbase_device *kbdev,
 		volts[KBASE_IPA_BLOCK_TYPE_SHADER_CORES] =
 			volts[KBASE_IPA_BLOCK_TYPE_TOP_LEVEL];
 	}
+#endif
 }
 
 #if KERNEL_VERSION(5, 10, 0) > LINUX_VERSION_CODE
@@ -594,7 +616,7 @@ static unsigned long kbase_get_dynamic_power(unsigned long freq,
 
 		/* Here unlike kbase_get_real_power(), shader core frequency is
 		 * used for the scaling as simple power model is used to obtain
-		 * the value of dynamic coefficient (which is is a fixed value
+		 * the value of dynamic coefficient (which is a fixed value
 		 * retrieved from the device tree).
 		 */
 		power += kbase_scale_dynamic_power(
@@ -734,7 +756,7 @@ void kbase_ipa_reset_data(struct kbase_device *kbdev)
 
 	mutex_lock(&kbdev->ipa.lock);
 
-	now = ktime_get();
+	now = ktime_get_raw();
 	diff = ktime_sub(now, kbdev->ipa.last_sample_time);
 	elapsed_time = ktime_to_ms(diff);
 
@@ -749,7 +771,7 @@ void kbase_ipa_reset_data(struct kbase_device *kbdev)
 		if (model != kbdev->ipa.fallback_model)
 			model->ops->reset_counter_data(model);
 
-		kbdev->ipa.last_sample_time = ktime_get();
+		kbdev->ipa.last_sample_time = ktime_get_raw();
 	}
 
 	mutex_unlock(&kbdev->ipa.lock);

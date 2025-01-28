@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note
 /*
  *
- * (C) COPYRIGHT 2016-2021 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2016-2022 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
@@ -93,20 +93,17 @@ void kbase_as_fault_debugfs_init(struct kbase_device *kbdev)
 	debugfs_directory = debugfs_create_dir("address_spaces",
 					       kbdev->mali_debugfs_directory);
 
-	if (debugfs_directory) {
-		for (i = 0; i < kbdev->nr_hw_address_spaces; i++) {
-			snprintf(as_name, ARRAY_SIZE(as_name), "as%u", i);
-			debugfs_create_file(as_name, S_IRUGO,
-					    debugfs_directory,
-					    (void *)(uintptr_t)i,
-					    &as_fault_fops);
-		}
-	} else {
+	if (IS_ERR_OR_NULL(debugfs_directory)) {
 		dev_warn(kbdev->dev,
 			 "unable to create address_spaces debugfs directory");
+	} else {
+		for (i = 0; i < kbdev->nr_hw_address_spaces; i++) {
+			if (likely(scnprintf(as_name, ARRAY_SIZE(as_name), "as%u", i)))
+				debugfs_create_file(as_name, 0444, debugfs_directory,
+						    (void *)(uintptr_t)i, &as_fault_fops);
+		}
 	}
 
 #endif /* CONFIG_MALI_BIFROST_DEBUG */
 #endif /* CONFIG_DEBUG_FS */
-	return;
 }

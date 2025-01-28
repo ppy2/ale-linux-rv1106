@@ -1,0 +1,50 @@
+* Omnivision OV6211 MIPI CSI-2 sensor
+
+The OV6211 has an image array capable of operating at up to 120 frames per
+second in 400x400 resolution. All required image processing functions including
+exposure control are programmable through the SCCB interface.
+
+
+Required Properties:
+- compatible: shall be "ovti,ov6211"
+- reg: I2C slave addresses
+- reg-names : names of maps with programmable addresses
+- clocks: reference to the xvclk input clock
+- clock-names: shall be "xvclk"
+- avdd-supply: Analog voltage supply, 2.9 volts
+- dovdd-supply: Digital I/O voltage supply, 1.8 volts
+- reset-gpios: Low active reset gpio
+- powerdown-gpios: High active powerdown gpio
+
+The device node shall contain one 'port' child node with an
+'endpoint' subnode for its digital output video port,
+in accordance with the video interface bindings defined in
+Documentation/devicetree/bindings/media/video-interfaces.txt.
+The endpoint optional property 'data-lanes' shall be "<1>".
+
+
+Example:
+
+	&i2c1 {
+		...
+
+		ov6211@20 {
+			compatible = "ovti,ov6211";
+			reg = <0x20 0x21>;
+			reg-names = "write", "read";
+			clocks = <&clk_cam>;
+			clock-names = "xvclk";
+			dovdd-supply = <&v1v8>;
+			avdd-supply = <&vdda>;
+			reset-gpios = <&gpiof 14 GPIO_ACTIVE_LOW>;
+			powerdown-gpios = <&gpiof 15 GPIO_ACTIVE_HIGH>;
+
+			port {
+				ov6211_0: endpoint {
+					data-lanes = <1>;
+					clock-lanes = <0>;
+					pclk-max-frequency = <72000000>;
+				};
+			};
+		};
+	};

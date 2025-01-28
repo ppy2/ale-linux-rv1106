@@ -8,9 +8,12 @@
 #include <media/v4l2-fwnode.h>
 #include <media/v4l2-subdev.h>
 #include <media/v4l2-event.h>
+#include <linux/rkcif-config.h>
 
 #define CSI2_ERR_FSFE_MASK	(0xff << 8)
 #define CSI2_ERR_COUNT_ALL_MASK	(0xff)
+
+#define RKCIF_V4L2_EVENT_ELEMS 4
 
 /*
  * there must be 5 pads: 1 input pad from sensor, and
@@ -18,14 +21,17 @@
  */
 #define CSI2_SINK_PAD			0
 #define CSI2_NUM_SINK_PADS		4
-#define CSI2_NUM_SRC_PADS		8
+#define CSI2_NUM_SRC_PADS		11
 #define CSI2_NUM_PADS			5
-#define CSI2_NUM_PADS_MAX		9
+#define CSI2_NUM_PADS_MAX		12
 #define CSI2_NUM_PADS_SINGLE_LINK	2
 #define MAX_CSI2_SENSORS		2
 
 #define RKCIF_DEFAULT_WIDTH	640
 #define RKCIF_DEFAULT_HEIGHT	480
+
+#define CSI_ERRSTR_LEN		(256)
+#define CSI_VCINFO_LEN		(12)
 
 /*
  * The default maximum bit-rate per lane in Mbps, if the
@@ -37,6 +43,7 @@
 #define CSIHOST_MAX_ERRINT_COUNT	10
 
 #define DEVICE_NAME "rockchip-mipi-csi2"
+#define DEVICE_NAME_HW "rockchip-mipi-csi2-hw"
 
 /* CSI Host Registers Define */
 #define CSIHOST_N_LANES		0x04
@@ -54,7 +61,9 @@
 #define CSIHOST_ERR1_ERR_BNDRY_MATCH	0x000000f0
 #define CSIHOST_ERR1_ERR_SEQ		0x00000f00
 #define CSIHOST_ERR1_ERR_FRM_DATA	0x0000f000
-#define CSIHOST_ERR1_ERR_CRC		0x1f000000
+#define CSIHOST_ERR1_ERR_CRC		0x0f000000
+#define CSIHOST_ERR1_ERR_ECC2		0x10000000
+#define CSIHOST_ERR1_ERR_CTRL		0x000f0000
 
 #define CSIHOST_ERR2_PHYERR_ESC		0x0000000f
 #define CSIHOST_ERR2_PHYERR_SOTHS	0x000000f0
@@ -69,6 +78,8 @@
 #define SW_DATATYPE_LS(x)	((x) << 20)
 #define SW_DATATYPE_LE(x)	((x) << 26)
 
+#define RK_MAX_CSI_HW		(6)
+
 /*
  * add new chip id in tail in time order
  * by increasing to distinguish csi2 host version
@@ -81,6 +92,8 @@ enum rkcsi2_chip_id {
 	CHIP_RV1126_CSI2,
 	CHIP_RK3568_CSI2,
 	CHIP_RK3588_CSI2,
+	CHIP_RV1106_CSI2,
+	CHIP_RK3562_CSI2,
 };
 
 enum csi2_pads {
@@ -109,9 +122,14 @@ enum host_type_t {
 struct csi2_match_data {
 	int chip_id;
 	int num_pads;
+	int num_hw;
 };
 
-struct csi2_sensor {
+struct csi2_hw_match_data {
+	int chip_id;
+};
+
+struct csi2_sensor_info {
 	struct v4l2_subdev *sd;
 	struct v4l2_mbus_config mbus;
 	int lanes;
@@ -141,19 +159,47 @@ struct csi2_dev {
 	int			stream_count;
 	struct v4l2_subdev	*src_sd;
 	bool			sink_linked[CSI2_NUM_SRC_PADS];
-	struct csi2_sensor	sensors[MAX_CSI2_SENSORS];
+	bool			is_check_sot_sync;
+	struct csi2_sensor_info	sensors[MAX_CSI2_SENSORS];
 	const struct csi2_match_data	*match_data;
 	int			num_sensors;
 	atomic_t		frm_sync_seq;
-	struct csi2_err_stats err_list[RK_CSI2_ERR_MAX];
+	struct csi2_err_stats	err_list[RK_CSI2_ERR_MAX];
+	struct csi2_hw		*csi2_hw[RK_MAX_CSI_HW];
+	int			irq1;
+	int			irq2;
+	int			dsi_input_en;
+	struct rkcif_csi_info	csi_info;
+	const char		*dev_name;
+};
+
+struct csi2_hw {
+	struct device		*dev;
+	struct clk_bulk_data	*clks_bulk;
+	int			clks_num;
+	struct reset_control	*rsts_bulk;
+	struct csi2_dev		*csi2;
+	const struct csi2_hw_match_data	*match_data;
+
+	void __iomem		*base;
+
+	/* lock to protect all members below */
+	struct mutex lock;
+
+	int			irq1;
+	int			irq2;
+	const char		*dev_name;
 };
 
 u32 rkcif_csi2_get_sof(struct csi2_dev *csi2_dev);
 void rkcif_csi2_set_sof(struct csi2_dev *csi2_dev, u32 seq);
 void rkcif_csi2_event_inc_sof(struct csi2_dev *csi2_dev);
-int __init rkcif_csi2_plat_drv_init(void);
-void __exit rkcif_csi2_plat_drv_exit(void);
+int rkcif_csi2_plat_drv_init(void);
+void rkcif_csi2_plat_drv_exit(void);
+int rkcif_csi2_hw_plat_drv_init(void);
+void rkcif_csi2_hw_plat_drv_exit(void);
 int rkcif_csi2_register_notifier(struct notifier_block *nb);
 int rkcif_csi2_unregister_notifier(struct notifier_block *nb);
+void rkcif_csi2_event_reset_pipe(struct csi2_dev *csi2_dev, int reset_src);
 
 #endif

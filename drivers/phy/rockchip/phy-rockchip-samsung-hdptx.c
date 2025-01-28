@@ -181,11 +181,18 @@
 #define OVRD_SB_AUX_EN				BIT(1)
 #define SB_AUX_EN				BIT(0)
 
+/* sb_reg0105 */
+#define ANA_SB_TX_HLVL_PROG			GENMASK(2, 0)
+
+/* sb_reg0106 */
+#define ANA_SB_TX_LLVL_PROG			GENMASK(6, 4)
+
 /* sb_reg010D */
 #define ANA_SB_DMRX_LPBK_DATA			BIT(4)
 
 /* sb_reg010F */
 #define OVRD_SB_VREG_EN				BIT(7)
+#define SB_VREG_EN				BIT(6)
 #define ANA_SB_VREG_GAIN_CTRL			GENMASK(3, 0)
 
 /* sb_reg0110 */
@@ -193,7 +200,6 @@
 #define ANA_SB_VREG_REF_SEL			BIT(0)
 
 /* sb_reg0113 */
-#define SB_VREG_EN				BIT(6)
 #define SB_RX_RCAL_OPT_CODE			GENMASK(5, 4)
 #define SB_RX_RTERM_CTRL			GENMASK(3, 0)
 
@@ -251,6 +257,10 @@
 /* lntop_reg0207 */
 #define LANE_EN					GENMASK(3, 0)
 
+/* lane_reg0301 */
+#define OVRD_LN_TX_DRV_EI_EN			BIT(7)
+#define LN_TX_DRV_EI_EN				BIT(6)
+
 /* lane_reg0303 */
 #define OVRD_LN_TX_DRV_LVL_CTRL			BIT(5)
 #define LN_TX_DRV_LVL_CTRL			GENMASK(4, 0)
@@ -262,6 +272,15 @@
 /* lane_reg0305 */
 #define OVRD_LN_TX_DRV_PRE_LVL_CTRL		BIT(6)
 #define LN_TX_DRV_PRE_LVL_CTRL			GENMASK(5, 2)
+
+/* lane_reg0306 */
+#define LN_ANA_TX_DRV_IDRV_IDN_CTRL		GENMASK(7, 5)
+#define LN_ANA_TX_DRV_IDRV_IUP_CTRL		GENMASK(4, 2)
+#define LN_ANA_TX_DRV_ACCDRV_EN			BIT(0)
+
+/* lane_reg0307 */
+#define LN_ANA_TX_DRV_ACCDRV_POL_SEL		BIT(6)
+#define LN_ANA_TX_DRV_ACCDRV_CTRL		GENMASK(5, 3)
 
 /* lane_reg030A */
 #define LN_ANA_TX_JEQ_EN			BIT(4)
@@ -281,10 +300,6 @@
 
 /* lane_reg030E */
 #define LN_TX_JEQ_ODD_CTRL_HBR3			GENMASK(7, 4)
-
-/* lane_reg0307 */
-#define LN_ANA_TX_DRV_ACCDRV_POL_SEL		BIT(6)
-#define LN_ANA_TX_DRV_ACCDRV_CTRL		GENMASK(5, 3)
 
 /* lane_reg0310 */
 #define LN_ANA_TX_SYNC_LOSS_DET_MODE		GENMASK(1, 0)
@@ -326,37 +341,135 @@ enum {
 	DP_BW_HBR3,
 };
 
-static struct {
-	u8 tx_amp;
-	u8 tx_de_emp;
-	u8 tx_pre_emp;
-} training_table[4][4] = {
+struct tx_drv_ctrl {
+	u8 tx_drv_lvl_ctrl;
+	u8 tx_drv_post_lvl_ctrl;
+	u8 ana_tx_drv_idrv_idn_ctrl;
+	u8 ana_tx_drv_idrv_iup_ctrl;
+	u8 ana_tx_drv_accdrv_en;
+	u8 ana_tx_drv_accdrv_ctrl;
+} __packed;
+
+static struct tx_drv_ctrl tx_drv_ctrl_rbr[4][4] = {
 	/* voltage swing 0, pre-emphasis 0->3 */
 	{
-		{ .tx_amp = 0x3, .tx_de_emp = 0x1, .tx_pre_emp = 0x1 },
-		{ .tx_amp = 0x9, .tx_de_emp = 0x7, .tx_pre_emp = 0x0 },
-		{ .tx_amp = 0xc, .tx_de_emp = 0xa, .tx_pre_emp = 0x0 },
-		{ .tx_amp = 0xd, .tx_de_emp = 0xc, .tx_pre_emp = 0x0 }
+		{ 0x1, 0x0, 0x4, 0x6, 0x0, 0x4 },
+		{ 0x4, 0x3, 0x4, 0x6, 0x0, 0x4 },
+		{ 0x7, 0x6, 0x4, 0x6, 0x0, 0x4 },
+		{ 0xd, 0xb, 0x7, 0x7, 0x1, 0x7 },
 	},
 
 	/* voltage swing 1, pre-emphasis 0->2 */
 	{
-		{ .tx_amp = 0x6, .tx_de_emp = 0x1, .tx_pre_emp = 0x1 },
-		{ .tx_amp = 0xc, .tx_de_emp = 0x7, .tx_pre_emp = 0x0 },
-		{ .tx_amp = 0xd, .tx_de_emp = 0x9, .tx_pre_emp = 0x0 },
+		{ 0x4, 0x0, 0x4, 0x6, 0x0, 0x4 },
+		{ 0xa, 0x5, 0x4, 0x6, 0x0, 0x4 },
+		{ 0xd, 0x8, 0x7, 0x7, 0x1, 0x7 },
 	},
 
 	/* voltage swing 2, pre-emphasis 0->1 */
 	{
-		{ .tx_amp = 0x9, .tx_de_emp = 0x1, .tx_pre_emp = 0x1 },
-		{ .tx_amp = 0xd, .tx_de_emp = 0x6, .tx_pre_emp = 0x0 },
+		{ 0x8, 0x0, 0x4, 0x6, 0x0, 0x4 },
+		{ 0xd, 0x5, 0x7, 0x7, 0x1, 0x7 },
 	},
 
 	/* voltage swing 3, pre-emphasis 0 */
 	{
-		{ .tx_amp = 0xd, .tx_de_emp = 0x1, .tx_pre_emp = 0x1 },
+		{ 0xd, 0x0, 0x7, 0x7, 0x1, 0x4 },
 	}
 };
+
+static struct tx_drv_ctrl tx_drv_ctrl_hbr[4][4] = {
+	/* voltage swing 0, pre-emphasis 0->3 */
+	{
+		{ 0x2, 0x1, 0x4, 0x6, 0x0, 0x4 },
+		{ 0x5, 0x4, 0x4, 0x6, 0x0, 0x4 },
+		{ 0x9, 0x8, 0x4, 0x6, 0x0, 0x4 },
+		{ 0xd, 0xb, 0x7, 0x7, 0x1, 0x7 },
+	},
+
+	/* voltage swing 1, pre-emphasis 0->2 */
+	{
+		{ 0x6, 0x1, 0x4, 0x6, 0x0, 0x4 },
+		{ 0xb, 0x6, 0x4, 0x6, 0x0, 0x4 },
+		{ 0xd, 0x8, 0x7, 0x7, 0x1, 0x7 },
+	},
+
+	/* voltage swing 2, pre-emphasis 0->1 */
+	{
+		{ 0x9, 0x1, 0x4, 0x6, 0x0, 0x4 },
+		{ 0xd, 0x6, 0x7, 0x7, 0x1, 0x7 },
+	},
+
+	/* voltage swing 3, pre-emphasis 0 */
+	{
+		{ 0xd, 0x1, 0x7, 0x7, 0x1, 0x4 },
+	}
+};
+
+static struct tx_drv_ctrl tx_drv_ctrl_hbr2[4][4] = {
+	/* voltage swing 0, pre-emphasis 0->3 */
+	{
+		{ 0x2, 0x1, 0x4, 0x6, 0x0, 0x4 },
+		{ 0x5, 0x4, 0x4, 0x6, 0x0, 0x4 },
+		{ 0x9, 0x8, 0x4, 0x6, 0x1, 0x4 },
+		{ 0xd, 0xb, 0x7, 0x7, 0x1, 0x7 },
+	},
+
+	/* voltage swing 1, pre-emphasis 0->2 */
+	{
+		{ 0x6, 0x1, 0x4, 0x6, 0x0, 0x4 },
+		{ 0xc, 0x7, 0x4, 0x6, 0x0, 0x4 },
+		{ 0xd, 0x8, 0x7, 0x7, 0x1, 0x7 },
+	},
+
+	/* voltage swing 2, pre-emphasis 0->1 */
+	{
+		{ 0x9, 0x1, 0x4, 0x6, 0x0, 0x4 },
+		{ 0xd, 0x6, 0x7, 0x7, 0x1, 0x7 },
+	},
+
+	/* voltage swing 3, pre-emphasis 0 */
+	{
+		{ 0xd, 0x0, 0x7, 0x7, 0x1, 0x4 },
+	}
+};
+
+static int rockchip_hdptx_phy_parse_training_table(struct device *dev)
+{
+	size_t size = sizeof(struct tx_drv_ctrl) * 10;
+	u8 *buf, *training_table;
+	int i, j;
+
+	buf = kzalloc(size, GFP_KERNEL);
+	if (!buf)
+		return -ENOMEM;
+
+	if (device_property_read_u8_array(dev, "training-table", buf, size)) {
+		kfree(buf);
+		return 0;
+	}
+
+	training_table = buf;
+
+	for (i = 0; i < 4; i++) {
+		for (j = 0; j < 4; j++) {
+			struct tx_drv_ctrl *ctrl;
+
+			if (i + j > 3)
+				continue;
+
+			ctrl = (struct tx_drv_ctrl *)training_table;
+			tx_drv_ctrl_rbr[i][j] = *ctrl;
+			tx_drv_ctrl_hbr[i][j] = *ctrl;
+			tx_drv_ctrl_hbr2[i][j] = *ctrl;
+			training_table += sizeof(*ctrl);
+		}
+	}
+
+	kfree(buf);
+
+	return 0;
+}
 
 static int rockchip_grf_write(struct regmap *grf, unsigned int reg,
 			      unsigned int mask, unsigned int val)
@@ -387,6 +500,7 @@ static int rockchip_hdptx_phy_verify_config(struct rockchip_hdptx_phy *hdptx,
 	}
 
 	switch (dp->lanes) {
+	case 0:
 	case 1:
 	case 2:
 	case 4:
@@ -412,73 +526,60 @@ static void rockchip_hdptx_phy_set_voltage(struct rockchip_hdptx_phy *hdptx,
 					   struct phy_configure_opts_dp *dp,
 					   u8 lane)
 {
-	u32 val;
-
-	regmap_update_bits(hdptx->regmap, LANE_REG(lane, 0x0c28),
-			   LN_ANA_TX_JEQ_EN,
-			   FIELD_PREP(LN_ANA_TX_JEQ_EN, 0x1));
+	const struct tx_drv_ctrl *ctrl;
 
 	switch (dp->link_rate) {
 	case 1620:
-		regmap_update_bits(hdptx->regmap, LANE_REG(lane, 0x0c28),
-				   LN_TX_JEQ_EVEN_CTRL_RBR,
-				   FIELD_PREP(LN_TX_JEQ_EVEN_CTRL_RBR, 0x7));
-		regmap_update_bits(hdptx->regmap, LANE_REG(lane, 0x0c30),
-				   LN_TX_JEQ_ODD_CTRL_RBR,
-				   FIELD_PREP(LN_TX_JEQ_ODD_CTRL_RBR, 0x7));
+		ctrl = &tx_drv_ctrl_rbr[dp->voltage[lane]][dp->pre[lane]];
 		regmap_update_bits(hdptx->regmap, LANE_REG(lane, 0x0c44),
 				   LN_TX_SER_40BIT_EN_RBR,
 				   FIELD_PREP(LN_TX_SER_40BIT_EN_RBR, 0x1));
 		break;
 	case 2700:
-		regmap_update_bits(hdptx->regmap, LANE_REG(lane, 0x0c2c),
-				   LN_TX_JEQ_EVEN_CTRL_HBR,
-				   FIELD_PREP(LN_TX_JEQ_EVEN_CTRL_HBR, 0x7));
-		regmap_update_bits(hdptx->regmap, LANE_REG(lane, 0x0c34),
-				   LN_TX_JEQ_ODD_CTRL_HBR,
-				   FIELD_PREP(LN_TX_JEQ_ODD_CTRL_HBR, 0x7));
+		ctrl = &tx_drv_ctrl_hbr[dp->voltage[lane]][dp->pre[lane]];
 		regmap_update_bits(hdptx->regmap, LANE_REG(lane, 0x0c44),
 				   LN_TX_SER_40BIT_EN_HBR,
 				   FIELD_PREP(LN_TX_SER_40BIT_EN_HBR, 0x1));
 		break;
 	case 5400:
-		regmap_update_bits(hdptx->regmap, LANE_REG(lane, 0x0c2c),
-				   LN_TX_JEQ_EVEN_CTRL_HBR2,
-				   FIELD_PREP(LN_TX_JEQ_EVEN_CTRL_HBR2, 0x7));
-		regmap_update_bits(hdptx->regmap, LANE_REG(lane, 0x0c34),
-				   LN_TX_JEQ_ODD_CTRL_HBR2,
-				   FIELD_PREP(LN_TX_JEQ_ODD_CTRL_HBR2, 0x7));
+	default:
+		ctrl = &tx_drv_ctrl_hbr2[dp->voltage[lane]][dp->pre[lane]];
 		regmap_update_bits(hdptx->regmap, LANE_REG(lane, 0x0c44),
 				   LN_TX_SER_40BIT_EN_HBR2,
 				   FIELD_PREP(LN_TX_SER_40BIT_EN_HBR2, 0x1));
 		break;
 	}
 
-	val = training_table[dp->voltage[lane]][dp->pre[lane]].tx_amp;
 	regmap_update_bits(hdptx->regmap, LANE_REG(lane, 0x0c0c),
 			   OVRD_LN_TX_DRV_LVL_CTRL | LN_TX_DRV_LVL_CTRL,
 			   FIELD_PREP(OVRD_LN_TX_DRV_LVL_CTRL, 0x1) |
-			   FIELD_PREP(LN_TX_DRV_LVL_CTRL, val));
+			   FIELD_PREP(LN_TX_DRV_LVL_CTRL,
+				      ctrl->tx_drv_lvl_ctrl));
 
-	val = training_table[dp->voltage[lane]][dp->pre[lane]].tx_de_emp;
 	regmap_update_bits(hdptx->regmap, LANE_REG(lane, 0x0c10),
 			   OVRD_LN_TX_DRV_POST_LVL_CTRL |
 			   LN_TX_DRV_POST_LVL_CTRL,
 			   FIELD_PREP(OVRD_LN_TX_DRV_POST_LVL_CTRL, 0x1) |
-			   FIELD_PREP(LN_TX_DRV_POST_LVL_CTRL, val));
+			   FIELD_PREP(LN_TX_DRV_POST_LVL_CTRL,
+				      ctrl->tx_drv_post_lvl_ctrl));
 
-	val = training_table[dp->voltage[lane]][dp->pre[lane]].tx_pre_emp;
-	regmap_update_bits(hdptx->regmap, LANE_REG(lane, 0x0c14),
-			   OVRD_LN_TX_DRV_PRE_LVL_CTRL |
-			   LN_TX_DRV_PRE_LVL_CTRL,
-			   FIELD_PREP(OVRD_LN_TX_DRV_PRE_LVL_CTRL, 0x1) |
-			   FIELD_PREP(LN_TX_DRV_PRE_LVL_CTRL, val));
+	regmap_update_bits(hdptx->regmap, LANE_REG(lane, 0x0c18),
+			   LN_ANA_TX_DRV_IDRV_IDN_CTRL |
+			   LN_ANA_TX_DRV_IDRV_IUP_CTRL |
+			   LN_ANA_TX_DRV_ACCDRV_EN,
+			   FIELD_PREP(LN_ANA_TX_DRV_IDRV_IDN_CTRL,
+				      ctrl->ana_tx_drv_idrv_idn_ctrl) |
+			   FIELD_PREP(LN_ANA_TX_DRV_IDRV_IUP_CTRL,
+				      ctrl->ana_tx_drv_idrv_iup_ctrl) |
+			   FIELD_PREP(LN_ANA_TX_DRV_ACCDRV_EN,
+				      ctrl->ana_tx_drv_accdrv_en));
 
 	regmap_update_bits(hdptx->regmap, LANE_REG(lane, 0x0c1c),
 			   LN_ANA_TX_DRV_ACCDRV_POL_SEL |
 			   LN_ANA_TX_DRV_ACCDRV_CTRL,
 			   FIELD_PREP(LN_ANA_TX_DRV_ACCDRV_POL_SEL, 0x1) |
-			   FIELD_PREP(LN_ANA_TX_DRV_ACCDRV_CTRL, 0x4));
+			   FIELD_PREP(LN_ANA_TX_DRV_ACCDRV_CTRL,
+				      ctrl->ana_tx_drv_accdrv_ctrl));
 	regmap_update_bits(hdptx->regmap, LANE_REG(lane, 0x0c6c),
 			   LN_ANA_TX_RESERVED,
 			   FIELD_PREP(LN_ANA_TX_RESERVED, 0x1));
@@ -494,9 +595,53 @@ static int rockchip_hdptx_phy_set_voltages(struct rockchip_hdptx_phy *hdptx,
 					   struct phy_configure_opts_dp *dp)
 {
 	u8 lane;
+	u32 status;
+	int ret;
 
 	for (lane = 0; lane < dp->lanes; lane++)
 		rockchip_hdptx_phy_set_voltage(hdptx, dp, lane);
+
+	reset_control_deassert(hdptx->lane_reset);
+
+	ret = regmap_read_poll_timeout(hdptx->grf, HDPTXPHY_GRF_STATUS0,
+				       status, FIELD_GET(PHY_RDY, status),
+				       50, 5000);
+	if (ret) {
+		dev_err(hdptx->dev, "timeout waiting for phy_rdy\n");
+		return ret;
+	}
+
+	return 0;
+}
+
+static void rockchip_hdptx_phy_lane_disable(struct rockchip_hdptx_phy *hdptx)
+{
+	reset_control_assert(hdptx->lane_reset);
+
+	regmap_update_bits(hdptx->regmap, 0x081c, LANE_EN,
+			   FIELD_PREP(LANE_EN, 0x0));
+
+	rockchip_grf_write(hdptx->grf, HDPTXPHY_GRF_CON0, PLL_EN,
+			   FIELD_PREP(PLL_EN, 0x0));
+
+	regmap_update_bits(hdptx->regmap, 0x0020, OVRD_LCPLL_EN | LCPLL_EN,
+			   FIELD_PREP(OVRD_LCPLL_EN, 0x1) |
+			   FIELD_PREP(LCPLL_EN, 0x0));
+	regmap_update_bits(hdptx->regmap, 0x00f4, OVRD_ROPLL_EN | ROPLL_EN,
+			   FIELD_PREP(OVRD_ROPLL_EN, 0x1) |
+			   FIELD_PREP(ROPLL_EN, 0x0));
+}
+
+static int rockchip_hdptx_phy_set_lanes(struct rockchip_hdptx_phy *hdptx,
+					struct phy_configure_opts_dp *dp)
+{
+	if (!dp->lanes) {
+		rockchip_hdptx_phy_lane_disable(hdptx);
+		return 0;
+	}
+
+	regmap_update_bits(hdptx->regmap, 0x081c, LANE_EN,
+			   FIELD_PREP(LANE_EN, GENMASK(dp->lanes - 1, 0)));
 
 	return 0;
 }
@@ -507,15 +652,8 @@ static int rockchip_hdptx_phy_set_rate(struct rockchip_hdptx_phy *hdptx,
 	u32 bw, status;
 	int ret;
 
-	reset_control_assert(hdptx->lane_reset);
-	udelay(20);
-	reset_control_assert(hdptx->cmn_reset);
-	udelay(20);
 	rockchip_grf_write(hdptx->grf, HDPTXPHY_GRF_CON0, PLL_EN,
 			   FIELD_PREP(PLL_EN, 0x0));
-	udelay(20);
-	regmap_update_bits(hdptx->regmap, 0x081c, LANE_EN,
-			   FIELD_PREP(LANE_EN, 0x0));
 
 	switch (dp->link_rate) {
 	case 1620:
@@ -540,10 +678,10 @@ static int rockchip_hdptx_phy_set_rate(struct rockchip_hdptx_phy *hdptx,
 				   FIELD_PREP(OVRD_ROPLL_SSC_EN, 0x1) |
 				   FIELD_PREP(ROPLL_SSC_EN, 0x1));
 		regmap_write(hdptx->regmap, 0x01d4,
-			     FIELD_PREP(ANA_ROPLL_SSC_FM_DEVIATION, 0xe));
+			     FIELD_PREP(ANA_ROPLL_SSC_FM_DEVIATION, 0xc));
 		regmap_update_bits(hdptx->regmap, 0x01d8,
 				   ANA_ROPLL_SSC_FM_FREQ,
-				   FIELD_PREP(ANA_ROPLL_SSC_FM_FREQ, 0x1a));
+				   FIELD_PREP(ANA_ROPLL_SSC_FM_FREQ, 0x1f));
 		regmap_update_bits(hdptx->regmap, 0x0264, SSC_EN,
 				   FIELD_PREP(SSC_EN, 0x2));
 	} else {
@@ -560,31 +698,21 @@ static int rockchip_hdptx_phy_set_rate(struct rockchip_hdptx_phy *hdptx,
 				   FIELD_PREP(SSC_EN, 0x0));
 	}
 
+	regmap_update_bits(hdptx->regmap, 0x0020, OVRD_LCPLL_EN | LCPLL_EN,
+			   FIELD_PREP(OVRD_LCPLL_EN, 0x1) |
+			   FIELD_PREP(LCPLL_EN, 0x0));
+	regmap_update_bits(hdptx->regmap, 0x00f4, OVRD_ROPLL_EN | ROPLL_EN,
+			   FIELD_PREP(OVRD_ROPLL_EN, 0x1) |
+			   FIELD_PREP(ROPLL_EN, 0x1));
+
 	rockchip_grf_write(hdptx->grf, HDPTXPHY_GRF_CON0, PLL_EN,
 			   FIELD_PREP(PLL_EN, 0x1));
-	udelay(20);
-	reset_control_deassert(hdptx->cmn_reset);
-	udelay(20);
 
 	ret = regmap_read_poll_timeout(hdptx->grf, HDPTXPHY_GRF_STATUS0,
 				       status, FIELD_GET(PLL_LOCK_DONE, status),
 				       50, 1000);
 	if (ret) {
 		dev_err(hdptx->dev, "timeout waiting for pll_lock_done\n");
-		return ret;
-	}
-
-	regmap_update_bits(hdptx->regmap, 0x081c, LANE_EN,
-			   FIELD_PREP(LANE_EN, GENMASK(dp->lanes - 1, 0)));
-
-	reset_control_deassert(hdptx->lane_reset);
-	udelay(20);
-
-	ret = regmap_read_poll_timeout(hdptx->grf, HDPTXPHY_GRF_STATUS0,
-				       status, FIELD_PREP(PHY_RDY, status),
-				       50, 1000);
-	if (ret) {
-		dev_err(hdptx->dev, "timeout waiting for phy_rdy\n");
 		return ret;
 	}
 
@@ -615,6 +743,14 @@ static int rockchip_hdptx_phy_configure(struct phy *phy,
 		}
 	}
 
+	if (opts->dp.set_lanes) {
+		ret = rockchip_hdptx_phy_set_lanes(hdptx, &opts->dp);
+		if (ret) {
+			dev_err(hdptx->dev, "failed to set lanes: %d\n", ret);
+			return ret;
+		}
+	}
+
 	if (opts->dp.set_voltages) {
 		ret = rockchip_hdptx_phy_set_voltages(hdptx, &opts->dp);
 		if (ret) {
@@ -629,15 +765,6 @@ static int rockchip_hdptx_phy_configure(struct phy *phy,
 
 static void rockchip_hdptx_phy_dp_pll_init(struct rockchip_hdptx_phy *hdptx)
 {
-	regmap_update_bits(hdptx->regmap, 0x0020, OVRD_LCPLL_EN | LCPLL_EN,
-			   FIELD_PREP(OVRD_LCPLL_EN, 0x1) |
-			   FIELD_PREP(LCPLL_EN, 0x0));
-	regmap_update_bits(hdptx->regmap, 0x00f4, OVRD_ROPLL_EN | ROPLL_EN,
-			   FIELD_PREP(OVRD_ROPLL_EN, 0x1) |
-			   FIELD_PREP(ROPLL_EN, 0x1));
-	regmap_update_bits(hdptx->regmap, 0x0138, ANA_ROPLL_PI_EN,
-			   FIELD_PREP(ANA_ROPLL_PI_EN, 0x1));
-
 	regmap_write(hdptx->regmap, 0x0144, FIELD_PREP(ROPLL_PMS_MDIV, 0x87));
 	regmap_write(hdptx->regmap, 0x0148, FIELD_PREP(ROPLL_PMS_MDIV, 0x71));
 	regmap_write(hdptx->regmap, 0x014c, FIELD_PREP(ROPLL_PMS_MDIV, 0x71));
@@ -702,8 +829,8 @@ static void rockchip_hdptx_phy_dp_pll_init(struct rockchip_hdptx_phy *hdptx)
 			   FIELD_PREP(ROPLL_SDC_N_RBR, 0x2));
 	regmap_update_bits(hdptx->regmap, 0x01a8,
 			   ROPLL_SDC_N_HBR | ROPLL_SDC_N_HBR2,
-			   FIELD_PREP(ROPLL_SDC_N_HBR, 0x1) |
-			   FIELD_PREP(ROPLL_SDC_N_HBR2, 0x1));
+			   FIELD_PREP(ROPLL_SDC_N_HBR, 0x2) |
+			   FIELD_PREP(ROPLL_SDC_N_HBR2, 0x2));
 
 	regmap_write(hdptx->regmap, 0x01b0,
 		     FIELD_PREP(ROPLL_SDC_NUMERATOR, 0x3));
@@ -769,6 +896,11 @@ static int rockchip_hdptx_phy_dp_aux_init(struct rockchip_hdptx_phy *hdptx)
 {
 	u32 status;
 	int ret;
+
+	regmap_update_bits(hdptx->regmap, 0x0414, ANA_SB_TX_HLVL_PROG,
+			   FIELD_PREP(ANA_SB_TX_HLVL_PROG, 0x7));
+	regmap_update_bits(hdptx->regmap, 0x0418, ANA_SB_TX_LLVL_PROG,
+			   FIELD_PREP(ANA_SB_TX_LLVL_PROG, 0x7));
 
 	regmap_update_bits(hdptx->regmap, 0x044c,
 			   SB_RX_RCAL_OPT_CODE | SB_RX_RTERM_CTRL,
@@ -874,9 +1006,21 @@ static int rockchip_hdptx_phy_dp_aux_init(struct rockchip_hdptx_phy *hdptx)
 
 static void rockchip_hdptx_phy_reset(struct rockchip_hdptx_phy *hdptx)
 {
+	u32 lane;
+
 	reset_control_assert(hdptx->lane_reset);
 	reset_control_assert(hdptx->cmn_reset);
 	reset_control_assert(hdptx->init_reset);
+
+	reset_control_assert(hdptx->apb_reset);
+	udelay(10);
+	reset_control_deassert(hdptx->apb_reset);
+
+	for (lane = 0; lane < 4; lane++)
+		regmap_update_bits(hdptx->regmap, LANE_REG(lane, 0x0c04),
+				   OVRD_LN_TX_DRV_EI_EN | LN_TX_DRV_EI_EN,
+				   FIELD_PREP(OVRD_LN_TX_DRV_EI_EN, 1) |
+				   FIELD_PREP(LN_TX_DRV_EI_EN, 0));
 
 	rockchip_grf_write(hdptx->grf, HDPTXPHY_GRF_CON0, PLL_EN,
 			   FIELD_PREP(PLL_EN, 0));
@@ -884,6 +1028,15 @@ static void rockchip_hdptx_phy_reset(struct rockchip_hdptx_phy *hdptx)
 			   FIELD_PREP(BIAS_EN, 0));
 	rockchip_grf_write(hdptx->grf, HDPTXPHY_GRF_CON0, BGR_EN,
 			   FIELD_PREP(BGR_EN, 0));
+}
+
+static bool rockchip_hdptx_phy_enabled(struct rockchip_hdptx_phy *hdptx)
+{
+	u32 status;
+
+	regmap_read(hdptx->grf, HDPTXPHY_GRF_STATUS0, &status);
+
+	return FIELD_GET(SB_RDY, status);
 }
 
 static int rockchip_hdptx_phy_power_on(struct phy *phy)
@@ -897,11 +1050,10 @@ static int rockchip_hdptx_phy_power_on(struct phy *phy)
 	if (ret)
 		return ret;
 
-	rockchip_hdptx_phy_reset(hdptx);
+	if (rockchip_hdptx_phy_enabled(hdptx))
+		return 0;
 
-	reset_control_assert(hdptx->apb_reset);
-	udelay(10);
-	reset_control_deassert(hdptx->apb_reset);
+	rockchip_hdptx_phy_reset(hdptx);
 
 	for (lane = 0; lane < 4; lane++) {
 		u32 invert = hdptx->lane_polarity_invert[lane];
@@ -1044,12 +1196,13 @@ static int rockchip_hdptx_phy_probe(struct platform_device *pdev)
 	device_property_read_u32_array(dev, "lane-polarity-invert",
 				       hdptx->lane_polarity_invert, 4);
 
+	ret = rockchip_hdptx_phy_parse_training_table(dev);
+	if (ret)
+		return dev_err_probe(dev, ret, "failed to parse training table\n");
+
 	phy = devm_phy_create(dev, NULL, &rockchip_hdptx_phy_ops);
-	if (IS_ERR(phy)) {
-		ret = PTR_ERR(phy);
-		dev_err(dev, "failed to create PHY: %d\n", ret);
-		return ret;
-	}
+	if (IS_ERR(phy))
+		return dev_err_probe(dev, PTR_ERR(phy), "failed to create PHY\n");
 
 	phy_set_drvdata(phy, hdptx);
 

@@ -134,7 +134,7 @@ static const struct xhci_plat_priv xhci_plat_renesas_rcar_gen3 = {
 };
 
 static const struct xhci_plat_priv xhci_plat_brcm = {
-	.quirks = XHCI_RESET_ON_RESUME,
+	.quirks = XHCI_RESET_ON_RESUME | XHCI_SUSPEND_RESUME_CLKS,
 };
 
 static const struct of_device_id usb_xhci_of_match[] = {
@@ -142,6 +142,7 @@ static const struct of_device_id usb_xhci_of_match[] = {
 		.compatible = "generic-xhci",
 	}, {
 		.compatible = "xhci-platform",
+#ifndef CONFIG_ARCH_ROCKCHIP
 	}, {
 		.compatible = "marvell,armada-375-xhci",
 		.data = &xhci_plat_marvell_armada,
@@ -178,6 +179,7 @@ static const struct of_device_id usb_xhci_of_match[] = {
 	}, {
 		.compatible = "brcm,bcm7445-xhci",
 		.data = &xhci_plat_brcm,
+#endif
 	},
 	{},
 };
@@ -358,6 +360,13 @@ static int xhci_plat_probe(struct platform_device *pdev)
 		if (device_property_read_bool(tmpdev, "quirk-broken-port-ped"))
 			xhci->quirks |= XHCI_BROKEN_PORT_PED;
 
+		if (device_property_read_bool(tmpdev, "quirk-skip-phy-init"))
+			xhci->quirks |= XHCI_SKIP_PHY_INIT;
+
+		if (device_property_read_bool(tmpdev,
+					      "xhci-u2-broken-suspend"))
+			xhci->quirks |= XHCI_U2_BROKEN_SUSPEND;
+
 		device_property_read_u32(tmpdev, "imod-interval-ns",
 					 &xhci->imod_interval);
 	}
@@ -478,6 +487,9 @@ static int __maybe_unused xhci_plat_suspend(struct device *dev)
 	struct xhci_hcd	*xhci = hcd_to_xhci(hcd);
 	int ret;
 
+	if (pm_runtime_suspended(dev))
+		pm_runtime_resume(dev);
+
 	ret = xhci_priv_suspend_quirk(hcd);
 	if (ret)
 		return ret;
@@ -485,7 +497,16 @@ static int __maybe_unused xhci_plat_suspend(struct device *dev)
 	 * xhci_suspend() needs `do_wakeup` to know whether host is allowed
 	 * to do wakeup during suspend.
 	 */
-	return xhci_suspend(xhci, device_may_wakeup(dev));
+	ret = xhci_suspend(xhci, device_may_wakeup(dev));
+	if (ret)
+		return ret;
+
+	if (!device_may_wakeup(dev) && (xhci->quirks & XHCI_SUSPEND_RESUME_CLKS)) {
+		clk_disable_unprepare(xhci->clk);
+		clk_disable_unprepare(xhci->reg_clk);
+	}
+
+	return 0;
 }
 
 static int __maybe_unused xhci_plat_resume(struct device *dev)
@@ -493,6 +514,11 @@ static int __maybe_unused xhci_plat_resume(struct device *dev)
 	struct usb_hcd	*hcd = dev_get_drvdata(dev);
 	struct xhci_hcd	*xhci = hcd_to_xhci(hcd);
 	int ret;
+
+	if (!device_may_wakeup(dev) && (xhci->quirks & XHCI_SUSPEND_RESUME_CLKS)) {
+		clk_prepare_enable(xhci->clk);
+		clk_prepare_enable(xhci->reg_clk);
+	}
 
 	ret = xhci_priv_resume_quirk(hcd);
 	if (ret)

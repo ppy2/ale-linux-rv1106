@@ -18,6 +18,8 @@
 #ifndef _PINCTRL_ROCKCHIP_H
 #define _PINCTRL_ROCKCHIP_H
 
+#include <linux/gpio/driver.h>
+
 #define RK_GPIO0_A0	0
 #define RK_GPIO0_A1	1
 #define RK_GPIO0_A2	2
@@ -185,6 +187,7 @@
 
 enum rockchip_pinctrl_type {
 	PX30,
+	RV1106,
 	RV1108,
 	RV1126,
 	RK1808,
@@ -196,6 +199,8 @@ enum rockchip_pinctrl_type {
 	RK3308,
 	RK3368,
 	RK3399,
+	RK3528,
+	RK3562,
 	RK3568,
 	RK3588,
 };
@@ -257,6 +262,7 @@ enum rockchip_pin_drv_type {
 	DRV_TYPE_IO_1V8_ONLY,
 	DRV_TYPE_IO_1V8_3V0_AUTO,
 	DRV_TYPE_IO_3V3_ONLY,
+	DRV_TYPE_IO_SMIC,
 	DRV_TYPE_MAX
 };
 
@@ -339,7 +345,7 @@ struct rockchip_pin_bank {
 	u32				toggle_edge_mode;
 	u32				recalced_mask;
 	u32				route_mask;
-	struct list_head		deferred_output;
+	struct list_head		deferred_pins;
 	struct mutex			deferred_lock;
 };
 
@@ -398,16 +404,12 @@ struct rockchip_pin_ctrl {
 	struct rockchip_mux_route_data *iomux_routes;
 	u32				niomux_routes;
 
-	int	(*ctrl_data_re_init)(struct rockchip_pin_ctrl *ctrl);
-
-	int	(*soc_data_init)(struct rockchip_pinctrl *info);
-
-	void	(*pull_calc_reg)(struct rockchip_pin_bank *bank,
-				    int pin_num, struct regmap **regmap,
-				    int *reg, u8 *bit);
-	void	(*drv_calc_reg)(struct rockchip_pin_bank *bank,
-				    int pin_num, struct regmap **regmap,
-				    int *reg, u8 *bit);
+	int	(*pull_calc_reg)(struct rockchip_pin_bank *bank,
+				 int pin_num, struct regmap **regmap,
+				 int *reg, u8 *bit);
+	int	(*drv_calc_reg)(struct rockchip_pin_bank *bank,
+				int pin_num, struct regmap **regmap,
+				int *reg, u8 *bit);
 	int	(*schmitt_calc_reg)(struct rockchip_pin_bank *bank,
 				    int pin_num, struct regmap **regmap,
 				    int *reg, u8 *bit);
@@ -422,9 +424,12 @@ struct rockchip_pin_config {
 	unsigned int		nconfigs;
 };
 
-struct rockchip_pin_output_deferred {
+enum pin_config_param;
+
+struct rockchip_pin_deferred {
 	struct list_head head;
 	unsigned int pin;
+	enum pin_config_param param;
 	u32 arg;
 };
 
@@ -468,5 +473,20 @@ struct rockchip_pinctrl {
 	struct rockchip_pmx_func	*functions;
 	unsigned int			nfunctions;
 };
+
+#if IS_ENABLED(CONFIG_PINCTRL_ROCKCHIP)
+int rk_iomux_set(int bank, int pin, int mux);
+int rk_iomux_get(int bank, int pin, int *mux);
+#else
+static inline int rk_iomux_set(int bank, int pin, int mux)
+{
+	return -EINVAL;
+}
+
+static inline int rk_iomux_get(int bank, int pin, int *mux)
+{
+	return -EINVAL;
+}
+#endif
 
 #endif

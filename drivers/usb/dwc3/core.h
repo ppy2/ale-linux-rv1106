@@ -42,7 +42,7 @@
 #define DWC3_EP0_SETUP_SIZE	512
 #define DWC3_ENDPOINTS_NUM	32
 #define DWC3_XHCI_RESOURCES_NUM	2
-#define DWC3_ISOC_MAX_RETRIES	5
+#define DWC3_ISOC_MAX_RETRIES	50
 
 #define DWC3_SCRATCHBUF_SIZE	4096	/* each buffer is assumed to be 4KiB */
 #define DWC3_EVENT_BUFFERS_SIZE	4096
@@ -144,7 +144,7 @@
 #define DWC3_GHWPARAMS8		0xc600
 #define DWC3_GUCTL3		0xc60c
 #define DWC3_GFLADJ		0xc630
-#define DWC3_GHWPARAMS9		0xc680
+#define DWC3_GHWPARAMS9		0xc6e0
 
 /* Device Registers */
 #define DWC3_DCFG		0xc700
@@ -262,6 +262,7 @@
 #define DWC3_GUCTL1_DEV_FORCE_20_CLK_FOR_30_CLK	BIT(26)
 #define DWC3_GUCTL1_DEV_L1_EXIT_BY_HW		BIT(24)
 #define DWC3_GUCTL1_PARKMODE_DISABLE_SS		BIT(17)
+#define DWC3_GUCTL1_PARKMODE_DISABLE_HS		BIT(16)
 
 /* Global Status Register */
 #define DWC3_GSTS_OTG_IP	BIT(10)
@@ -324,6 +325,7 @@
 /* Global RX Fifo Size Register */
 #define DWC31_GRXFIFOSIZ_RXFDEP(n)	((n) & 0x7fff)	/* DWC_usb31 only */
 #define DWC3_GRXFIFOSIZ_RXFDEP(n)	((n) & 0xffff)
+#define DWC3_GRXFIFOSIZ_RXFSTADDR(n)	((n) & 0xffff0000)
 
 /* Global Event Size Registers */
 #define DWC3_GEVNTSIZ_INTMASK		BIT(31)
@@ -374,6 +376,7 @@
 #define DWC3_GHWPARAMS6_HNPSUPPORT		BIT(11)
 #define DWC3_GHWPARAMS6_SRPSUPPORT		BIT(10)
 #define DWC3_GHWPARAMS6_EN_FPGA			BIT(7)
+#define DWC3_GHWPARAMS6_RAM0_DEPTH(n)		(((n) >> 16) & 0xffff)
 
 /* DWC_usb32 only */
 #define DWC3_GHWPARAMS6_MDWIDTH(n)		((n) & (0x3 << 8))
@@ -730,6 +733,7 @@ struct dwc3_ep {
 #define DWC3_EP_FIRST_STREAM_PRIMED	BIT(10)
 #define DWC3_EP_PENDING_CLEAR_STALL	BIT(11)
 #define DWC3_EP_TXFIFO_RESIZED		BIT(12)
+#define DWC3_EP_DELAY_STOP             BIT(13)
 
 	/* This last one is specific to EP0 */
 #define DWC3_EP0_DIR_IN		BIT(31)
@@ -884,6 +888,7 @@ struct dwc3_hwparams {
 
 /* HWPARAMS1 */
 #define DWC3_NUM_INT(n)		(((n) & (0x3f << 15)) >> 15)
+#define DWC3_NUM_RAMS(n)	(((n) & (0x3 << 21)) >> 21)
 
 /* HWPARAMS3 */
 #define DWC3_NUM_IN_EPS_MASK	(0x1f << 18)
@@ -1090,6 +1095,8 @@ struct dwc3_scratchpad_array {
  * @dis_tx_ipgap_linecheck_quirk: set if we disable u2mac linestate
  *			check during HS transmit.
  * @parkmode_disable_ss_quirk: set if we need to disable all SuperSpeed
+ *			instances in park mode.
+ * @parkmode_disable_hs_quirk: set if we need to disable all HishSpeed
  *			instances in park mode.
  * @tx_de_emphasis_quirk: set if we enable Tx de-emphasis quirk
  * @tx_de_emphasis: Tx de-emphasis value
@@ -1306,6 +1313,7 @@ struct dwc3 {
 	unsigned		dis_del_phy_power_chg_quirk:1;
 	unsigned		dis_tx_ipgap_linecheck_quirk:1;
 	unsigned		parkmode_disable_ss_quirk:1;
+	unsigned		parkmode_disable_hs_quirk:1;
 
 	unsigned		tx_de_emphasis_quirk:1;
 	unsigned		tx_de_emphasis:2;
@@ -1330,10 +1338,12 @@ struct dwc3 {
 /**
  * struct dwc3_vendor - contains parameters without modifying the format of DWC3 core
  * @dwc: contains dwc3 core reference
+ * @clear_stall_protocol: endpoint number that requires a delayed status phase
  * @softconnect: true when gadget connect is called, false when disconnect runs
  */
 struct dwc3_vendor {
 	struct dwc3	dwc;
+	u8		clear_stall_protocol;
 	unsigned	softconnect:1;
 };
 
@@ -1546,6 +1556,8 @@ bool dwc3_has_imod(struct dwc3 *dwc);
 int dwc3_event_buffers_setup(struct dwc3 *dwc);
 void dwc3_event_buffers_cleanup(struct dwc3 *dwc);
 
+int dwc3_core_soft_reset(struct dwc3 *dwc);
+
 #if IS_ENABLED(CONFIG_USB_DWC3_HOST) || IS_ENABLED(CONFIG_USB_DWC3_DUAL_ROLE)
 int dwc3_host_init(struct dwc3 *dwc);
 void dwc3_host_exit(struct dwc3 *dwc);
@@ -1568,6 +1580,7 @@ int dwc3_send_gadget_generic_command(struct dwc3 *dwc, unsigned int cmd,
 		u32 param);
 void dwc3_stop_active_transfer(struct dwc3_ep *dep, bool force, bool interrupt);
 void dwc3_gadget_clear_tx_fifos(struct dwc3 *dwc);
+void dwc3_remove_requests(struct dwc3 *dwc, struct dwc3_ep *dep, int status);
 #else
 static inline int dwc3_gadget_init(struct dwc3 *dwc)
 { return 0; }

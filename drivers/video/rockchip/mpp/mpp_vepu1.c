@@ -264,6 +264,7 @@ static int vepu_run(struct mpp_dev *mpp,
 	u32 i;
 	u32 reg_en;
 	struct vepu_task *task = to_vepu_task(mpp_task);
+	u32 timing_en = mpp->srv->timing_en;
 
 	mpp_debug_enter();
 
@@ -282,12 +283,21 @@ static int vepu_run(struct mpp_dev *mpp,
 
 		mpp_write_req(mpp, task->reg, s, e, reg_en);
 	}
+
+	/* flush tlb before starting hardware */
+	mpp_iommu_flush_tlb(mpp->iommu_info);
+
 	/* init current task */
 	mpp->cur_task = mpp_task;
+
+	mpp_task_run_begin(mpp_task, timing_en, MPP_WORK_TIMEOUT_DELAY);
+
 	/* Last, flush start registers */
 	wmb();
 	mpp_write(mpp, VEPU1_REG_ENC_EN,
 		  task->reg[reg_en] | VEPU1_ENC_START);
+
+	mpp_task_run_end(mpp_task, timing_en);
 
 	mpp_debug_leave();
 
@@ -499,7 +509,7 @@ static int vepu_dump_session(struct mpp_session *session, struct seq_file *seq)
 	}
 	seq_puts(seq, "\n");
 	/* item data*/
-	seq_printf(seq, "|%8p|", session);
+	seq_printf(seq, "|%8d|", session->index);
 	seq_printf(seq, "%8s|", mpp_device_name[session->device_type]);
 	for (i = ENC_INFO_BASE; i < ENC_INFO_BUTT; i++) {
 		u32 flag = priv->codec_info[i].flag;
@@ -532,7 +542,7 @@ static int vepu_show_session_info(struct seq_file *seq, void *offset)
 	mutex_lock(&mpp->srv->session_lock);
 	list_for_each_entry_safe(session, n,
 				 &mpp->srv->session_list,
-				 session_link) {
+				 service_link) {
 		if (session->device_type != MPP_DEVICE_VEPU1)
 			continue;
 		if (!session->priv)
@@ -555,6 +565,10 @@ static int vepu_procfs_init(struct mpp_dev *mpp)
 		enc->procfs = NULL;
 		return -EIO;
 	}
+
+	/* for common mpp_dev options */
+	mpp_procfs_create_common(enc->procfs, mpp);
+
 	mpp_procfs_create_u32("aclk", 0644,
 			      enc->procfs, &enc->aclk_info.debug_rate_hz);
 	mpp_procfs_create_u32("session_buffers", 0644,
@@ -656,13 +670,13 @@ static int vepu_reset(struct mpp_dev *mpp)
 
 	if (enc->rst_a && enc->rst_h) {
 		/* Don't skip this or iommu won't work after reset */
-		rockchip_pmu_idle_request(mpp->dev, true);
+		mpp_pmu_idle_request(mpp, true);
 		mpp_safe_reset(enc->rst_a);
 		mpp_safe_reset(enc->rst_h);
 		udelay(5);
 		mpp_safe_unreset(enc->rst_a);
 		mpp_safe_unreset(enc->rst_h);
-		rockchip_pmu_idle_request(mpp->dev, false);
+		mpp_pmu_idle_request(mpp, false);
 	}
 	mpp_write(mpp, VEPU1_REG_ENC_EN, 0);
 
@@ -722,12 +736,14 @@ static int vepu_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	mpp = &enc->mpp;
-	platform_set_drvdata(pdev, enc);
+	platform_set_drvdata(pdev, mpp);
 
 	if (pdev->dev.of_node) {
 		match = of_match_node(mpp_vepu1_dt_match, pdev->dev.of_node);
 		if (match)
 			mpp->var = (struct mpp_dev_var *)match->data;
+
+		mpp->core_id = of_alias_get_id(pdev->dev.of_node, "vepu");
 	}
 
 	ret = mpp_dev_probe(mpp, pdev);
@@ -758,37 +774,19 @@ static int vepu_probe(struct platform_device *pdev)
 static int vepu_remove(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
-	struct vepu_dev *enc = platform_get_drvdata(pdev);
+	struct mpp_dev *mpp = dev_get_drvdata(dev);
 
 	dev_info(dev, "remove device\n");
-	mpp_dev_remove(&enc->mpp);
-	vepu_procfs_remove(&enc->mpp);
+	mpp_dev_remove(mpp);
+	vepu_procfs_remove(mpp);
 
 	return 0;
-}
-
-static void vepu_shutdown(struct platform_device *pdev)
-{
-	int ret;
-	int val;
-	struct device *dev = &pdev->dev;
-	struct vepu_dev *enc = platform_get_drvdata(pdev);
-	struct mpp_dev *mpp = &enc->mpp;
-
-	dev_info(dev, "shutdown device\n");
-
-	atomic_inc(&mpp->srv->shutdown_request);
-	ret = readx_poll_timeout(atomic_read,
-				 &mpp->task_count,
-				 val, val == 0, 20000, 200000);
-	if (ret == -ETIMEDOUT)
-		dev_err(dev, "wait total running time out\n");
 }
 
 struct platform_driver rockchip_vepu1_driver = {
 	.probe = vepu_probe,
 	.remove = vepu_remove,
-	.shutdown = vepu_shutdown,
+	.shutdown = mpp_dev_shutdown,
 	.driver = {
 		.name = VEPU1_DRIVER_NAME,
 		.of_match_table = of_match_ptr(mpp_vepu1_dt_match),

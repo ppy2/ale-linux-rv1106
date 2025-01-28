@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 /*
  *
- * (C) COPYRIGHT 2016-2021 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2016-2022 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
@@ -29,14 +29,19 @@ struct devfreq;
 /**
  * enum kbase_ipa_block_type - Type of block for which power estimation is done.
  *
+ * @KBASE_IPA_BLOCK_TYPE_USING_CLK_MALI:
+ *				       Blocks using clk_mali in dts.
  * @KBASE_IPA_BLOCK_TYPE_TOP_LEVEL:    Top-level block, that covers CSHW,
  *                                     MEMSYS, Tiler.
  * @KBASE_IPA_BLOCK_TYPE_SHADER_CORES: All Shader cores.
+ * @KBASE_IPA_BLOCK_TYPE_FOR_CLK_GPU:  Dummy for clk_gpu in dts.
  * @KBASE_IPA_BLOCK_TYPE_NUM:          Number of blocks.
  */
 enum kbase_ipa_block_type {
+	KBASE_IPA_BLOCK_TYPE_USING_CLK_MALI,
 	KBASE_IPA_BLOCK_TYPE_TOP_LEVEL,
 	KBASE_IPA_BLOCK_TYPE_SHADER_CORES,
+	KBASE_IPA_BLOCK_TYPE_FOR_CLK_GPU,
 	KBASE_IPA_BLOCK_TYPE_NUM
 };
 
@@ -266,7 +271,6 @@ int kbase_get_real_power(struct devfreq *df, u32 *power,
 				unsigned long freq,
 				unsigned long voltage);
 
-#if MALI_UNIT_TEST
 /* Called by kbase_get_real_power() to invoke the power models.
  * Must be called with kbdev->ipa.lock held.
  * This function is only exposed for use by unit tests.
@@ -274,7 +278,6 @@ int kbase_get_real_power(struct devfreq *df, u32 *power,
 int kbase_get_real_power_locked(struct kbase_device *kbdev, u32 *power,
 				unsigned long freq,
 				unsigned long voltage);
-#endif /* MALI_UNIT_TEST */
 
 extern struct devfreq_cooling_power kbase_ipa_power_model_ops;
 

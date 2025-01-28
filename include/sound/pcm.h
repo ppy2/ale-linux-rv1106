@@ -428,6 +428,10 @@ struct snd_pcm_runtime {
 	/* -- OSS things -- */
 	struct snd_pcm_oss_runtime oss;
 #endif
+#ifndef __GENKSYMS__
+	struct mutex buffer_mutex;	/* protect for buffer changes */
+	atomic_t buffer_accessing;	/* >0: in r/w operation, <0: blocked */
+#endif
 };
 
 struct snd_pcm_group {		/* keep linked substreams */
@@ -1181,6 +1185,9 @@ static inline void snd_pcm_gettime(struct snd_pcm_runtime *runtime,
 		break;
 	case SNDRV_PCM_TSTAMP_TYPE_MONOTONIC_RAW:
 		ktime_get_raw_ts64(tv);
+		break;
+	case SNDRV_PCM_TSTAMP_TYPE_BOOTTIME:
+		ktime_get_boottime_ts64(tv);
 		break;
 	default:
 		ktime_get_real_ts64(tv);

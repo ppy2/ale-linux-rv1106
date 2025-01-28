@@ -37,7 +37,6 @@
 #include <linux/rockchip/grf.h>
 #include <linux/regmap.h>
 #include <linux/mfd/syscon.h>
-#include <linux/mmc/host.h>
 #ifdef CONFIG_OF
 #include <linux/of.h>
 #include <linux/of_device.h>
@@ -45,8 +44,6 @@
 #endif
 #include <linux/soc/rockchip/rk_vendor_storage.h>
 #include <linux/device.h>
-
-#include "../../drivers/mmc/core/pwrseq.h"
 
 #if 0
 #define DBG(x...) pr_info("[WLAN_RFKILL]: " x)
@@ -216,6 +213,7 @@ int rfkill_get_wifi_power_state(int *power)
 
 	return 0;
 }
+EXPORT_SYMBOL(rfkill_get_wifi_power_state);
 
 /**************************************************************************
  *
@@ -435,7 +433,7 @@ static int get_wifi_addr_vendor(unsigned char *addr)
 		    addr[5]);
 		ret = rk_vendor_write(WIFI_MAC_ID, addr, 6);
 		if (ret != 0) {
-			LOG("%s: rk_vendor_write failed %d\n"
+			LOG("%s: rk_vendor_write failed %d\n",
 			    __func__, ret);
 			memset(addr, 0, 6);
 			return -1;

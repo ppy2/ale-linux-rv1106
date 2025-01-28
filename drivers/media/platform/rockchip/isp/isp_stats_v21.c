@@ -33,6 +33,14 @@
 
 #define ISP2X_RAWAF_INT_LINE0_EN	BIT(27)
 
+static void isp_module_done(struct rkisp_isp_stats_vdev *stats_vdev,
+			    u32 reg, u32 value)
+{
+	void __iomem *base = stats_vdev->dev->hw_dev->base_addr;
+
+	writel(value, base + reg);
+}
+
 static int
 rkisp_stats_get_rawawb_meas_reg(struct rkisp_isp_stats_vdev *stats_vdev,
 				struct rkisp_isp21_stat_buffer *pbuf)
@@ -789,7 +797,7 @@ rkisp_stats_restart_rawawb_meas(struct rkisp_isp_stats_vdev *stats_vdev)
 
 	value = rkisp_read(stats_vdev->dev, ISP21_RAWAWB_CTRL, true);
 	if (value & ISP2X_3A_MEAS_DONE)
-		rkisp_write(stats_vdev->dev, ISP21_RAWAWB_CTRL, value, true);
+		isp_module_done(stats_vdev, ISP21_RAWAWB_CTRL, value);
 	return 0;
 }
 
@@ -800,8 +808,8 @@ rkisp_stats_restart_rawaf_meas(struct rkisp_isp_stats_vdev *stats_vdev)
 
 	value = rkisp_read(stats_vdev->dev, ISP_RAWAF_CTRL, true);
 	if (value & ISP2X_3A_MEAS_DONE) {
-		rkisp_write(stats_vdev->dev, ISP_RAWAF_CTRL, value, true);
 		rkisp_write(stats_vdev->dev, ISP_RAWAF_INT_STATE, 0, true);
+		isp_module_done(stats_vdev, ISP_RAWAF_CTRL, value);
 	}
 	return 0;
 }
@@ -828,7 +836,7 @@ rkisp_stats_restart_rawaebig_meas(struct rkisp_isp_stats_vdev *stats_vdev, u32 b
 
 	value = rkisp_read(stats_vdev->dev, addr + RAWAE_BIG_CTRL, true);
 	if (value & ISP2X_3A_MEAS_DONE)
-		rkisp_write(stats_vdev->dev, addr + RAWAE_BIG_CTRL, value, true);
+		isp_module_done(stats_vdev, addr + RAWAE_BIG_CTRL, value);
 	return 0;
 }
 
@@ -854,7 +862,7 @@ rkisp_stats_restart_rawhstbig_meas(struct rkisp_isp_stats_vdev *stats_vdev, u32 
 
 	value = rkisp_read(stats_vdev->dev, addr + ISP_RAWHIST_BIG_CTRL, true);
 	if (value & ISP2X_3A_MEAS_DONE)
-		rkisp_write(stats_vdev->dev, addr + ISP_RAWHIST_BIG_CTRL, value, true);
+		isp_module_done(stats_vdev, addr + ISP_RAWHIST_BIG_CTRL, value);
 	return 0;
 }
 
@@ -901,7 +909,7 @@ rkisp_stats_restart_rawae0_meas(struct rkisp_isp_stats_vdev *stats_vdev)
 
 	value = rkisp_read(stats_vdev->dev, ISP_RAWAE_LITE_CTRL, true);
 	if (value & ISP2X_3A_MEAS_DONE)
-		rkisp_write(stats_vdev->dev, ISP_RAWAE_LITE_CTRL, value, true);
+		isp_module_done(stats_vdev, ISP_RAWAE_LITE_CTRL, value);
 	return 0;
 }
 
@@ -912,7 +920,7 @@ rkisp_stats_restart_rawhst0_meas(struct rkisp_isp_stats_vdev *stats_vdev)
 
 	value = rkisp_read(stats_vdev->dev, ISP_RAWHIST_LITE_CTRL, true);
 	if (value & ISP2X_3A_MEAS_DONE)
-		rkisp_write(stats_vdev->dev, ISP_RAWHIST_LITE_CTRL, value, true);
+		isp_module_done(stats_vdev, ISP_RAWHIST_LITE_CTRL, value);
 	return 0;
 }
 
@@ -940,6 +948,7 @@ rkisp_stats_send_meas_v21(struct rkisp_isp_stats_vdev *stats_vdev,
 	struct rkisp_isp21_stat_buffer *cur_stat_buf = NULL;
 	struct rkisp_stats_v21_ops *ops =
 		(struct rkisp_stats_v21_ops *)stats_vdev->priv_ops;
+	struct rkisp_isp_params_vdev *params_vdev = &stats_vdev->dev->params_vdev;
 	int ret = 0;
 
 	cur_frame_id = meas_work->frame_id;
@@ -958,6 +967,7 @@ rkisp_stats_send_meas_v21(struct rkisp_isp_stats_vdev *stats_vdev,
 		cur_stat_buf =
 			(struct rkisp_isp21_stat_buffer *)(cur_buf->vaddr[0]);
 		cur_stat_buf->frame_id = cur_frame_id;
+		cur_stat_buf->params_id = params_vdev->cur_frame_id;
 	}
 
 	if (meas_work->isp_ris & ISP2X_AFM_SUM_OF)
@@ -1090,7 +1100,7 @@ rkisp_stats_isr_v21(struct rkisp_isp_stats_vdev *stats_vdev,
 		work.frame_id = cur_frame_id;
 		work.isp_ris = temp_isp_ris | isp_ris;
 		work.isp3a_ris = temp_isp3a_ris | iq_3a_mask;
-		work.timestamp = ktime_get_ns();
+		work.timestamp = rkisp_time_get_ns(dev);
 
 		rkisp_stats_send_meas_v21(stats_vdev, &work);
 	}
@@ -1110,27 +1120,28 @@ rkisp_stats_rdbk_enable_v21(struct rkisp_isp_stats_vdev *stats_vdev, bool en)
 	stats_vdev->rdbk_mode = en;
 }
 
+static void
+rkisp_get_stat_size_v21(struct rkisp_isp_stats_vdev *stats_vdev,
+			unsigned int sizes[])
+{
+	sizes[0] = sizeof(struct rkisp_isp2x_stat_buffer);
+	stats_vdev->vdev_fmt.fmt.meta.buffersize = sizes[0];
+}
+
 static struct rkisp_isp_stats_ops rkisp_isp_stats_ops_tbl = {
 	.isr_hdl = rkisp_stats_isr_v21,
 	.send_meas = rkisp_stats_send_meas_v21,
 	.rdbk_enable = rkisp_stats_rdbk_enable_v21,
+	.get_stat_size = rkisp_get_stat_size_v21,
 };
 
 void rkisp_stats_first_ddr_config_v21(struct rkisp_isp_stats_vdev *stats_vdev)
 {
-	int i;
-
 	stats_vdev->rd_stats_from_ddr = false;
 	stats_vdev->priv_ops = &rkisp_stats_reg_ops_v21;
 
-	if (!IS_HDR_RDBK(stats_vdev->dev->hdr.op_mode)) {
-		for (i = 0; i < RKISP_STATS_DDR_BUF_NUM; i++) {
-			stats_vdev->stats_buf[i].is_need_vaddr = true;
-			stats_vdev->stats_buf[i].size = RKISP_RD_STATS_BUF_SIZE;
-			if (rkisp_alloc_buffer(stats_vdev->dev, &stats_vdev->stats_buf[i]))
-				goto err;
-		}
-
+	if (!IS_HDR_RDBK(stats_vdev->dev->hdr.op_mode) &&
+	    stats_vdev->stats_buf[0].mem_priv) {
 		stats_vdev->priv_ops = &rkisp_stats_ddr_ops_v21;
 		stats_vdev->rd_stats_from_ddr = true;
 		stats_vdev->rd_buf_idx = 0;
@@ -1143,27 +1154,29 @@ void rkisp_stats_first_ddr_config_v21(struct rkisp_isp_stats_vdev *stats_vdev)
 		rkisp_set_bits(stats_vdev->dev, CTRL_SWS_CFG, SW_3A_DDR_WRITE_EN,
 			       SW_3A_DDR_WRITE_EN, false);
 	}
-	return;
-err:
-	for (i -= 1; i >= 0; i--)
-		rkisp_free_buffer(stats_vdev->dev, &stats_vdev->stats_buf[i]);
-	dev_err(stats_vdev->dev->dev, "alloc stats ddr buf fail\n");
 }
 
 void rkisp_init_stats_vdev_v21(struct rkisp_isp_stats_vdev *stats_vdev)
 {
-	stats_vdev->vdev_fmt.fmt.meta.dataformat =
-		V4L2_META_FMT_RK_ISP1_STAT_3A;
-	stats_vdev->vdev_fmt.fmt.meta.buffersize =
-		sizeof(struct rkisp_isp2x_stat_buffer);
+	int mult = stats_vdev->dev->hw_dev->unite ? ISP_UNITE_MAX : 1;
+	int i;
 
 	stats_vdev->ops = &rkisp_isp_stats_ops_tbl;
 	stats_vdev->priv_ops = &rkisp_stats_reg_ops_v21;
 	stats_vdev->rd_stats_from_ddr = false;
+
+	for (i = 0; i < RKISP_STATS_DDR_BUF_NUM; i++) {
+		stats_vdev->stats_buf[i].is_need_vaddr = true;
+		stats_vdev->stats_buf[i].size = RKISP_RD_STATS_BUF_SIZE * mult;
+		rkisp_alloc_buffer(stats_vdev->dev, &stats_vdev->stats_buf[i]);
+	}
 }
 
 void rkisp_uninit_stats_vdev_v21(struct rkisp_isp_stats_vdev *stats_vdev)
 {
+	int i;
 
+	for (i = 0; i < RKISP_STATS_DDR_BUF_NUM; i++)
+		rkisp_free_buffer(stats_vdev->dev, &stats_vdev->stats_buf[i]);
 }
 

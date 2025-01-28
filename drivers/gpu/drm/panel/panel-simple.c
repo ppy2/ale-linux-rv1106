@@ -28,6 +28,7 @@
 #include <linux/of_platform.h>
 #include <linux/platform_device.h>
 #include <linux/regulator/consumer.h>
+#include <linux/spi/spi.h>
 
 #include <video/display_timing.h>
 #include <video/mipi_display.h>
@@ -41,6 +42,11 @@
 #include <drm/drm_dsc.h>
 
 #include "panel-simple.h"
+
+enum panel_simple_cmd_type {
+	CMD_TYPE_DEFAULT,
+	CMD_TYPE_SPI
+};
 
 struct panel_cmd_header {
 	u8 data_type;
@@ -124,6 +130,11 @@ struct panel_desc {
 
 	struct panel_cmd_seq *init_seq;
 	struct panel_cmd_seq *exit_seq;
+
+	enum panel_simple_cmd_type cmd_type;
+
+	int (*spi_read)(struct device *dev, const u8 cmd, u8 *val);
+	int (*spi_write)(struct device *dev, const u8 *data, size_t len, u8 type);
 };
 
 struct panel_simple {
@@ -267,6 +278,29 @@ static int panel_simple_xfer_dsi_cmd_seq(struct panel_simple *panel,
 
 		if (cmd->header.delay)
 			msleep(cmd->header.delay);
+	}
+
+	return 0;
+}
+
+static int panel_simple_xfer_spi_cmd_seq(struct panel_simple *panel, struct panel_cmd_seq *cmds)
+{
+	int i;
+	int ret;
+
+	if (!cmds)
+		return -EINVAL;
+
+	for (i = 0; i < cmds->cmd_cnt; i++) {
+		struct panel_cmd_desc *cmd = &cmds->cmds[i];
+
+		ret = panel->desc->spi_write(panel->base.dev, cmd->payload,
+					     cmd->header.payload_length, cmd->header.data_type);
+		if (ret)
+			return ret;
+
+		if (cmd->header.delay)
+			usleep_range(cmd->header.delay * 1000, (cmd->header.delay + 1) * 1000);
 	}
 
 	return 0;
@@ -458,9 +492,17 @@ static int panel_simple_unprepare(struct drm_panel *panel)
 	if (!p->prepared)
 		return 0;
 
-	if (p->desc->exit_seq)
-		if (p->dsi)
-			panel_simple_xfer_dsi_cmd_seq(p, p->desc->exit_seq);
+	if (p->desc->exit_seq) {
+		if (p->desc->cmd_type == CMD_TYPE_SPI) {
+			if (panel_simple_xfer_spi_cmd_seq(p, p->desc->exit_seq)) {
+				dev_err(panel->dev, "failed to send exit spi cmds seq\n");
+				return -EINVAL;
+			}
+		} else {
+			if (p->dsi)
+				panel_simple_xfer_dsi_cmd_seq(p, p->desc->exit_seq);
+		}
+	}
 
 	gpiod_direction_output(p->reset_gpio, 1);
 	gpiod_direction_output(p->enable_gpio, 0);
@@ -518,16 +560,6 @@ static int panel_simple_prepare(struct drm_panel *panel)
 
 	gpiod_direction_output(p->enable_gpio, 1);
 
-	if (p->desc->delay.reset)
-		msleep(p->desc->delay.prepare);
-
-	gpiod_direction_output(p->reset_gpio, 1);
-
-	if (p->desc->delay.reset)
-		msleep(p->desc->delay.reset);
-
-	gpiod_direction_output(p->reset_gpio, 0);
-
 	delay = p->desc->delay.prepare;
 	if (p->no_hpd)
 		delay += p->desc->delay.hpd_absent_delay;
@@ -554,12 +586,27 @@ static int panel_simple_prepare(struct drm_panel *panel)
 		}
 	}
 
-	if (p->desc->init_seq)
-		if (p->dsi)
-			panel_simple_xfer_dsi_cmd_seq(p, p->desc->init_seq);
+	gpiod_direction_output(p->reset_gpio, 1);
+
+	if (p->desc->delay.reset)
+		msleep(p->desc->delay.reset);
+
+	gpiod_direction_output(p->reset_gpio, 0);
 
 	if (p->desc->delay.init)
 		msleep(p->desc->delay.init);
+
+	if (p->desc->init_seq) {
+		if (p->desc->cmd_type == CMD_TYPE_SPI) {
+			if (panel_simple_xfer_spi_cmd_seq(p, p->desc->init_seq)) {
+				dev_err(panel->dev, "failed to send init spi cmds seq\n");
+				return -EINVAL;
+			}
+		} else {
+			if (p->dsi)
+				panel_simple_xfer_dsi_cmd_seq(p, p->desc->init_seq);
+		}
+	}
 
 	p->prepared = true;
 
@@ -728,6 +775,52 @@ static void panel_simple_parse_panel_timing_node(struct device *dev,
 		dev_err(dev, "Reject override mode: No display_timing found\n");
 }
 
+static int dcs_bl_update_status(struct backlight_device *bl)
+{
+	struct panel_simple *p = bl_get_data(bl);
+	struct mipi_dsi_device *dsi = p->dsi;
+	int ret;
+
+	if (!p->prepared)
+		return 0;
+
+	dsi->mode_flags &= ~MIPI_DSI_MODE_LPM;
+
+	ret = mipi_dsi_dcs_set_display_brightness(dsi, bl->props.brightness);
+	if (ret < 0)
+		return ret;
+
+	dsi->mode_flags |= MIPI_DSI_MODE_LPM;
+
+	return 0;
+}
+
+static int dcs_bl_get_brightness(struct backlight_device *bl)
+{
+	struct panel_simple *p = bl_get_data(bl);
+	struct mipi_dsi_device *dsi = p->dsi;
+	u16 brightness = bl->props.brightness;
+	int ret;
+
+	if (!p->prepared)
+		return 0;
+
+	dsi->mode_flags &= ~MIPI_DSI_MODE_LPM;
+
+	ret = mipi_dsi_dcs_get_display_brightness(dsi, &brightness);
+	if (ret < 0)
+		return ret;
+
+	dsi->mode_flags |= MIPI_DSI_MODE_LPM;
+
+	return brightness & 0xff;
+}
+
+static const struct backlight_ops dcs_bl_ops = {
+	.update_status = dcs_bl_update_status,
+	.get_brightness = dcs_bl_get_brightness,
+};
+
 static int panel_simple_probe(struct device *dev, const struct panel_desc *desc)
 {
 	struct panel_simple *panel;
@@ -753,8 +846,11 @@ static int panel_simple_probe(struct device *dev, const struct panel_desc *desc)
 	}
 
 	panel->supply = devm_regulator_get(dev, "power");
-	if (IS_ERR(panel->supply))
-		return PTR_ERR(panel->supply);
+	if (IS_ERR(panel->supply)) {
+		err = PTR_ERR(panel->supply);
+		dev_err(dev, "failed to get power regulator: %d\n", err);
+		return err;
+	}
 
 	panel->enable_gpio = devm_gpiod_get_optional(dev, "enable", GPIOD_ASIS);
 	if (IS_ERR(panel->enable_gpio)) {
@@ -785,8 +881,11 @@ static int panel_simple_probe(struct device *dev, const struct panel_desc *desc)
 		panel->ddc = of_find_i2c_adapter_by_node(ddc);
 		of_node_put(ddc);
 
-		if (!panel->ddc)
-			return -EPROBE_DEFER;
+		if (!panel->ddc) {
+			err = -EPROBE_DEFER;
+			dev_err(dev, "failed to find ddc-i2c-bus: %d\n", err);
+			return err;
+		}
 	}
 
 	if (desc == &panel_dpi) {
@@ -794,6 +893,7 @@ static int panel_simple_probe(struct device *dev, const struct panel_desc *desc)
 		err = panel_dpi_probe(dev, panel);
 		if (err)
 			goto free_ddc;
+		desc = panel->desc;
 	} else {
 		if (!of_get_display_timing(dev->of_node, "panel-timing", &dt))
 			panel_simple_parse_panel_timing_node(dev, panel, &dt);
@@ -858,8 +958,10 @@ static int panel_simple_probe(struct device *dev, const struct panel_desc *desc)
 	drm_panel_init(&panel->base, dev, &panel_simple_funcs, connector_type);
 
 	err = drm_panel_of_backlight(&panel->base);
-	if (err)
+	if (err) {
+		dev_err(dev, "failed to find backlight: %d\n", err);
 		goto free_ddc;
+	}
 
 	drm_panel_add(&panel->base);
 
@@ -912,7 +1014,7 @@ static const struct drm_display_mode ampire_am_1280800n3tzqw_t00h_mode = {
 static const struct panel_desc ampire_am_1280800n3tzqw_t00h = {
 	.modes = &ampire_am_1280800n3tzqw_t00h_mode,
 	.num_modes = 1,
-	.bpc = 6,
+	.bpc = 8,
 	.size = {
 		.width = 217,
 		.height = 136,
@@ -2368,7 +2470,7 @@ static const struct display_timing innolux_g070y2_l01_timing = {
 static const struct panel_desc innolux_g070y2_l01 = {
 	.timings = &innolux_g070y2_l01_timing,
 	.num_timings = 1,
-	.bpc = 6,
+	.bpc = 8,
 	.size = {
 		.width = 152,
 		.height = 91,
@@ -2380,6 +2482,7 @@ static const struct panel_desc innolux_g070y2_l01 = {
 		.unprepare = 800,
 	},
 	.bus_format = MEDIA_BUS_FMT_RGB888_1X7X4_SPWG,
+	.bus_flags = DRM_BUS_FLAG_DE_HIGH,
 	.connector_type = DRM_MODE_CONNECTOR_LVDS,
 };
 
@@ -2436,7 +2539,7 @@ static const struct panel_desc innolux_g121i1_l01 = {
 		.enable = 200,
 		.disable = 20,
 	},
-	.bus_format = MEDIA_BUS_FMT_RGB888_1X7X4_SPWG,
+	.bus_format = MEDIA_BUS_FMT_RGB666_1X7X3_SPWG,
 	.connector_type = DRM_MODE_CONNECTOR_LVDS,
 };
 
@@ -2890,6 +2993,7 @@ static const struct display_timing logictechno_lt161010_2nh_timing = {
 static const struct panel_desc logictechno_lt161010_2nh = {
 	.timings = &logictechno_lt161010_2nh_timing,
 	.num_timings = 1,
+	.bpc = 6,
 	.size = {
 		.width = 154,
 		.height = 86,
@@ -2919,6 +3023,7 @@ static const struct display_timing logictechno_lt170410_2whc_timing = {
 static const struct panel_desc logictechno_lt170410_2whc = {
 	.timings = &logictechno_lt170410_2whc_timing,
 	.num_timings = 1,
+	.bpc = 8,
 	.size = {
 		.width = 217,
 		.height = 136,
@@ -4994,6 +5099,26 @@ static int panel_simple_dsi_probe(struct mipi_dsi_device *dsi)
 	panel = dev_get_drvdata(dev);
 	panel->dsi = dsi;
 
+	if (!panel->base.backlight) {
+		struct backlight_properties props;
+
+		memset(&props, 0, sizeof(props));
+		props.type = BACKLIGHT_RAW;
+		props.brightness = 255;
+		props.max_brightness = 255;
+
+		panel->base.backlight =
+			devm_backlight_device_register(dev, "dcs-backlight",
+						       dev, panel, &dcs_bl_ops,
+						       &props);
+		if (IS_ERR(panel->base.backlight)) {
+			err = PTR_ERR(panel->base.backlight);
+			dev_err(dev, "failed to register dcs backlight: %d\n",
+				err);
+			return err;
+		}
+	}
+
 	dsi->mode_flags = desc->flags;
 	dsi->format = desc->format;
 	dsi->lanes = desc->lanes;
@@ -5034,6 +5159,113 @@ static struct mipi_dsi_driver panel_simple_dsi_driver = {
 	.shutdown = panel_simple_dsi_shutdown,
 };
 
+static int panel_simple_spi_read(struct device *dev, const u8 cmd, u8 *data)
+{
+	return 0;
+}
+
+static int panel_simple_spi_write_word(struct device *dev, u16 data)
+{
+	struct spi_device *spi = to_spi_device(dev);
+	struct spi_transfer xfer = {
+		.len	= 2,
+		.tx_buf = &data,
+	};
+	struct spi_message msg;
+
+	spi_message_init(&msg);
+	spi_message_add_tail(&xfer, &msg);
+
+	return spi_sync(spi, &msg);
+}
+
+static int panel_simple_spi_write(struct device *dev, const u8 *data, size_t len, u8 type)
+{
+	int ret = 0;
+	int i;
+	u16 mask = type ? 0x100 : 0;
+
+	for (i = 0; i < len; i++) {
+		ret = panel_simple_spi_write_word(dev, *data | mask);
+		if (ret) {
+			dev_err(dev, "failed to write spi seq: %*ph\n", (int)len, data);
+			return ret;
+		}
+		data++;
+	}
+
+	return ret;
+}
+
+static const struct of_device_id panel_simple_spi_of_match[] = {
+	{ .compatible = "simple-panel-spi", .data = NULL },
+	{ /* sentinel */ }
+};
+MODULE_DEVICE_TABLE(of, panel_simple_spi_of_match);
+
+static int panel_simple_spi_probe(struct spi_device *spi)
+{
+	struct device *dev = &spi->dev;
+	const struct of_device_id *id;
+	const struct panel_desc *desc;
+	struct panel_desc *d;
+	int ret;
+
+	id = of_match_node(panel_simple_spi_of_match, dev->of_node);
+	if (!id)
+		return -ENODEV;
+
+	if (!id->data) {
+		d = devm_kzalloc(dev, sizeof(*d), GFP_KERNEL);
+		if (!d)
+			return -ENOMEM;
+
+		ret = panel_simple_of_get_desc_data(dev, d);
+		if (ret) {
+			dev_err(dev, "failed to get desc data: %d\n", ret);
+			return ret;
+		}
+
+		d->spi_write = panel_simple_spi_write;
+		d->spi_read = panel_simple_spi_read;
+		d->cmd_type = CMD_TYPE_SPI;
+	}
+	desc = id->data ? id->data : d;
+
+	/*
+	 * Set spi to 3 lines and 9bits/word mode.
+	 */
+	spi->bits_per_word = 9;
+	spi->mode = SPI_MODE_3;
+	ret = spi_setup(spi);
+	if (ret < 0) {
+		dev_err(dev, "spi setup failed.\n");
+		return ret;
+	}
+
+	return panel_simple_probe(dev, desc);
+}
+
+static int panel_simple_spi_remove(struct spi_device *spi)
+{
+	return panel_simple_remove(&spi->dev);
+}
+
+static void panel_simple_spi_shutdown(struct spi_device *spi)
+{
+	panel_simple_shutdown(&spi->dev);
+}
+
+static struct spi_driver panel_simple_spi_driver = {
+	.driver	= {
+		.name		= "panel-simple-spi",
+		.of_match_table = panel_simple_spi_of_match,
+	},
+	.probe			= panel_simple_spi_probe,
+	.remove			= panel_simple_spi_remove,
+	.shutdown		= panel_simple_spi_shutdown,
+};
+
 static int __init panel_simple_init(void)
 {
 	int err;
@@ -5041,6 +5273,12 @@ static int __init panel_simple_init(void)
 	err = platform_driver_register(&panel_simple_platform_driver);
 	if (err < 0)
 		return err;
+
+	if (IS_ENABLED(CONFIG_SPI_MASTER)) {
+		err = spi_register_driver(&panel_simple_spi_driver);
+		if (err < 0)
+			return err;
+	}
 
 	if (IS_ENABLED(CONFIG_DRM_MIPI_DSI)) {
 		err = mipi_dsi_driver_register(&panel_simple_dsi_driver);
@@ -5056,6 +5294,9 @@ static void __exit panel_simple_exit(void)
 {
 	if (IS_ENABLED(CONFIG_DRM_MIPI_DSI))
 		mipi_dsi_driver_unregister(&panel_simple_dsi_driver);
+
+	if (IS_ENABLED(CONFIG_SPI_MASTER))
+		spi_unregister_driver(&panel_simple_spi_driver);
 
 	platform_driver_unregister(&panel_simple_platform_driver);
 }

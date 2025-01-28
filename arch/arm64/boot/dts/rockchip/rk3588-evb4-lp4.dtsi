@@ -14,12 +14,21 @@
 		compatible = "pwm-fan";
 		#cooling-cells = <2>;
 		pwms = <&pwm14 0 50000 0>;
+		cooling-levels = <0 50 100 150 200 255>;
+		rockchip,temp-trips = <
+			50000	1
+			55000	2
+			60000	3
+			65000	4
+			70000	5
+		>;
 	};
 
 	pcie30_avdd1v8: pcie30-avdd1v8 {
 		compatible = "regulator-fixed";
 		regulator-name = "pcie30_avdd1v8";
 		regulator-boot-on;
+		regulator-always-on;
 		regulator-min-microvolt = <1800000>;
 		regulator-max-microvolt = <1800000>;
 		vin-supply = <&avcc_1v8_s0>;
@@ -29,6 +38,7 @@
 		compatible = "regulator-fixed";
 		regulator-name = "pcie30_avdd0v75";
 		regulator-boot-on;
+		regulator-always-on;
 		regulator-min-microvolt = <750000>;
 		regulator-max-microvolt = <750000>;
 		vin-supply = <&avdd_0v75_s0>;
@@ -72,6 +82,7 @@
 		regulator-max-microvolt = <3300000>;
 		enable-active-high;
 		regulator-boot-on;
+		regulator-always-on;
 		gpios = <&gpio3 RK_PD4 GPIO_ACTIVE_HIGH>;
 		startup-delay-us = <5000>;
 		vin-supply = <&vcc5v0_sys>;
@@ -183,6 +194,67 @@
 
 	phy-handle = <&rgmii_phy1>;
 	status = "okay";
+};
+
+&i2c0 {
+	status = "okay";
+	pinctrl-names = "default";
+	pinctrl-0 = <&i2c0m2_xfer>;
+
+	vdd_cpu_big0_s0: vdd_cpu_big0_mem_s0: rk8602@42 {
+		compatible = "rockchip,rk8602";
+		reg = <0x42>;
+		vin-supply = <&vcc5v0_sys>;
+		regulator-compatible = "rk860x-reg";
+		regulator-name = "vdd_cpu_big0_s0";
+		regulator-min-microvolt = <550000>;
+		regulator-max-microvolt = <1050000>;
+		regulator-ramp-delay = <2300>;
+		rockchip,suspend-voltage-selector = <1>;
+		regulator-boot-on;
+		regulator-always-on;
+		regulator-state-mem {
+			regulator-off-in-suspend;
+		};
+	};
+
+	vdd_cpu_big1_s0: vdd_cpu_big1_mem_s0: rk8603@43 {
+		compatible = "rockchip,rk8603";
+		reg = <0x43>;
+		vin-supply = <&vcc5v0_sys>;
+		regulator-compatible = "rk860x-reg";
+		regulator-name = "vdd_cpu_big1_s0";
+		regulator-min-microvolt = <550000>;
+		regulator-max-microvolt = <1050000>;
+		regulator-ramp-delay = <2300>;
+		rockchip,suspend-voltage-selector = <1>;
+		regulator-boot-on;
+		regulator-always-on;
+		regulator-state-mem {
+			regulator-off-in-suspend;
+		};
+	};
+};
+
+&i2c2 {
+	status = "okay";
+
+	vdd_npu_s0: vdd_npu_mem_s0: rk8602@42 {
+		compatible = "rockchip,rk8602";
+		reg = <0x42>;
+		vin-supply = <&vcc5v0_sys>;
+		regulator-compatible = "rk860x-reg";
+		regulator-name = "vdd_npu_s0";
+		regulator-min-microvolt = <550000>;
+		regulator-max-microvolt = <950000>;
+		regulator-ramp-delay = <2300>;
+		rockchip,suspend-voltage-selector = <1>;
+		regulator-boot-on;
+		regulator-always-on;
+		regulator-state-mem {
+			regulator-off-in-suspend;
+		};
+	};
 };
 
 &i2c6 {
@@ -309,7 +381,7 @@
 		touch_gpio: touch-gpio {
 			rockchip,pins =
 				<0 RK_PD5 RK_FUNC_GPIO &pcfg_pull_up>,
-				<0 RK_PC6 RK_FUNC_GPIO &pcfg_pull_none>;
+				<0 RK_PC6 RK_FUNC_GPIO &pcfg_pull_up>;
 		};
 	};
 
@@ -337,6 +409,11 @@
 &pwm14 {
 	pinctrl-0 = <&pwm14m1_pins>;
 	status = "okay";
+};
+
+&route_dsi0 {
+	status = "okay";
+	connect = <&vp3_out_dsi0>;
 };
 
 &u2phy2 {

@@ -15,10 +15,12 @@
 #include <linux/module.h>
 #include <linux/nvmem-consumer.h>
 #include <linux/of.h>
+#include <linux/of_platform.h>
 #include <linux/reset.h>
 #include <linux/mfd/syscon.h>
 #include <linux/phy/phy.h>
 #include <linux/platform_device.h>
+#include <linux/rational.h>
 #include <linux/regmap.h>
 #include <linux/rockchip/cpu.h>
 #include <linux/slab.h>
@@ -26,6 +28,7 @@
 #define UPDATE(x, h, l)		(((x) << (l)) & GENMASK((h), (l)))
 
 #define GRF_HDPTX_CON0			0x00
+#define LC_REF_CLK_SEL			BIT(11)
 #define HDPTX_I_PLL_EN			BIT(7)
 #define HDPTX_I_BIAS_EN			BIT(6)
 #define HDPTX_I_BGR_EN			BIT(5)
@@ -209,6 +212,7 @@
 #define PLL_PCG_POSTDIV_SEL(x)		UPDATE(x, 7, 4)
 #define PLL_PCG_CLK_SEL_MASK		GENMASK(3, 1)
 #define PLL_PCG_CLK_SEL(x)		UPDATE(x, 3, 1)
+#define PLL_PCG_CLK_EN			BIT(0)
 #define CMN_REG0087			0x021C
 #define PLL_FRL_MODE_EN			BIT(3)
 #define PLL_TX_HS_CLK_EN		BIT(2)
@@ -620,10 +624,15 @@
 #define LANE_REG062C			0x18B0
 #define LANE_REG062D			0x18B4
 
+#define HDMI20_MAX_RATE 600000000
 #define DATA_RATE_MASK 0xFFFFFFF
 #define COLOR_DEPTH_MASK BIT(31)
 #define HDMI_MODE_MASK BIT(30)
 #define HDMI_EARC_MASK BIT(29)
+
+#define FRL_8G_4LANES 3200000000ULL
+#define FRL_6G_3LANES 1800000000
+#define FRL_3G_3LANES 900000000
 
 enum hdptx_combphy_type {
 	SS_HDMI,
@@ -698,6 +707,7 @@ struct rockchip_hdptx_phy {
 	struct regmap *grf;
 
 	int irq;
+	int id;
 
 	struct phy *phy;
 	struct clk_bulk_data *clks;
@@ -706,7 +716,8 @@ struct rockchip_hdptx_phy {
 
 	/* clk provider */
 	struct clk_hw hw;
-	struct clk *pclk;
+	struct clk *dclk;
+	unsigned long rate;
 
 	struct reset_control *phy_reset;
 	struct reset_control *apb_reset;
@@ -717,6 +728,7 @@ struct rockchip_hdptx_phy {
 	struct reset_control *lcpll_reset;
 
 	bool earc_en;
+	int count;
 };
 
 struct lcpll_config lcpll_cfg[] = {
@@ -726,8 +738,14 @@ struct lcpll_config lcpll_cfg[] = {
 	{ 40000000, 1, 1, 0, 0x68, 0x68, 1, 1, 0, 0, 0, 1, 1, 1, 1, 9, 0, 1, 1,
 		0, 2, 3, 1, 0, 0x20, 0x0c, 1, 0,
 	},
-	{ 32000000, 1, 1, 1, 0x6b, 0x6b, 1, 1, 0, 1, 2, 1, 1, 1, 1, 9, 1, 2, 1,
-		0, 0x0d, 0x18, 1, 0, 0x20, 0x0c, 1, 1,
+	{ 24000000, 1, 0, 0, 0x7d, 0x7d, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1, 0, 0, 2,
+		0, 0x13, 0x18, 1, 0, 0x20, 0x0c, 1, 0,
+	},
+	{ 18000000, 1, 0, 0, 0x7d, 0x7d, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1, 0, 0, 2,
+		0, 0x13, 0x18, 1, 0, 0x20, 0x0c, 1, 0,
+	},
+	{ 9000000, 1, 0, 0, 0x7d, 0x7d, 1, 1, 3, 0, 0, 0, 0, 1, 1, 1, 0, 0, 2,
+		0, 0x13, 0x18, 1, 0, 0x20, 0x0c, 1, 0,
 	},
 	{ ~0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 		0, 0, 0, 0, 0, 0,
@@ -759,20 +777,56 @@ struct ropll_config ropll_tmds_cfg[] = {
 	{ 2970000, 124, 124, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 62, 1, 16, 5, 0,
 		1, 1, 0, 0x20, 0x0c, 1, 0x0e, 0, 0,
 	},
+	{ 1620000, 135, 135, 1, 1, 3, 1, 1, 0, 1, 1, 1, 1, 4, 0, 3, 5, 5, 0x10,
+		1, 0, 0x20, 0x0c, 1, 0x0e, 0, 0,
+	},
+	{ 1856250, 155, 155, 1, 1, 3, 1, 1, 1, 1, 1, 1, 1, 62, 1, 16, 5, 0,
+		1, 1, 0, 0x20, 0x0c, 1, 0x0e, 0, 0,
+	},
+	{ 1540000, 193, 193, 1, 1, 5, 1, 1, 1, 1, 1, 1, 1, 193, 1, 32, 2, 1,
+		1, 1, 0, 0x20, 0x0c, 1, 0x0e, 0, 0,
+	},
 	{ 1485000, 0x7b, 0x7b, 1, 1, 3, 1, 1, 1, 1, 1, 1, 1, 4, 0, 3, 5, 5, 0x10,
 		1, 0, 0x20, 0x0c, 1, 0x0e, 0, 0,
 	},
+	{ 1462500, 122, 122, 1, 1, 3, 1, 1, 1, 1, 1, 1, 1, 244, 1, 16, 2, 1, 1,
+		1, 0, 0x20, 0x0c, 1, 0x0e, 0, 0,
+	},
+	{ 1190000, 149, 149, 1, 1, 5, 1, 1, 1, 1, 1, 1, 1, 149, 1, 16, 2, 1, 1,
+		1, 0, 0x20, 0x0c, 1, 0x0e, 0, 0,
+	},
+	{ 1065000, 89, 89, 1, 1, 3, 1, 1, 1, 1, 1, 1, 1, 89, 1, 16, 1, 0, 1,
+		1, 0, 0x20, 0x0c, 1, 0x0e, 0, 0,
+	},
+	{ 1080000, 135, 135, 1, 1, 5, 1, 1, 0, 1, 0, 1, 1, 0x9, 0, 0x05, 0, 0x14,
+		0x18, 1, 0, 0x20, 0x0c, 1, 0x0e, 0, 0,
+	},
+	{ 855000, 214, 214, 1, 1, 11, 1, 1, 1, 1, 1, 1, 1, 214, 1, 16, 2, 1,
+		1, 1, 0, 0x20, 0x0c, 1, 0x0e, 0, 0,
+	},
+	{ 835000, 105, 105, 1, 1, 5, 1, 1, 1, 1, 1, 1, 1, 42, 1, 16, 1, 0,
+		1, 1, 0, 0x20, 0x0c, 1, 0x0e, 0, 0,
+	},
+	{ 928125, 155, 155, 1, 1, 7, 1, 1, 1, 1, 1, 1, 1, 62, 1, 16, 5, 0,
+		1, 1, 0, 0x20, 0x0c, 1, 0x0e, 0, 0,
+	},
 	{ 742500, 124, 124, 1, 1, 7, 1, 1, 1, 1, 1, 1, 1, 62, 1, 16, 5, 0,
+		1, 1, 0, 0x20, 0x0c, 1, 0x0e, 0, 0,
+	},
+	{ 650000, 162, 162, 1, 1, 11, 1, 1, 1, 1, 1, 1, 1, 54, 0, 16, 4, 1,
 		1, 1, 0, 0x20, 0x0c, 1, 0x0e, 0, 0,
 	},
 	{ 337500, 0x70, 0x70, 1, 1, 0xf, 1, 1, 1, 1, 1, 1, 1, 0x2, 0, 0x01, 5, 1,
 		1, 1, 0, 0x20, 0x0c, 1, 0x0e, 0, 0,
 	},
+	{ 400000, 100, 100, 1, 1, 11, 1, 1, 0, 1, 0, 1, 1, 0x9, 0, 0x05, 0, 0x14,
+		0x18, 1, 0, 0x20, 0x0c, 1, 0x0e, 0, 0,
+	},
 	{ 270000, 0x5a, 0x5a, 1, 1, 0xf, 1, 1, 0, 1, 0, 1, 1, 0x9, 0, 0x05, 0, 0x14,
 		0x18, 1, 0, 0x20, 0x0c, 1, 0x0e, 0, 0,
 	},
-	{ 251750, 0x53, 0x53, 1, 1, 0xf, 1, 1, 1, 1, 1, 1, 1, 0x9, 0, 0x05, 0, 0x14,
-		0x18, 1, 0, 0x20, 0x0c, 1, 0x0e, 0, 0,
+	{ 251750, 84, 84, 1, 1, 0xf, 1, 1, 1, 1, 1, 1, 1, 168, 1, 16, 4, 1,
+		1, 1, 0, 0x20, 0x0c, 1, 0x0e, 0, 0,
 	},
 	{ ~0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 		0, 0, 0, 0,
@@ -852,7 +906,7 @@ static void hdptx_pre_power_up(struct rockchip_hdptx_phy *hdptx)
 	u32 val = 0;
 
 	reset_control_assert(hdptx->apb_reset);
-	usleep_range(10, 20);
+	udelay(20);
 	reset_control_deassert(hdptx->apb_reset);
 
 	reset_control_assert(hdptx->lane_reset);
@@ -863,7 +917,42 @@ static void hdptx_pre_power_up(struct rockchip_hdptx_phy *hdptx)
 	hdptx_grf_write(hdptx, GRF_HDPTX_CON0, val);
 }
 
-static int hdptx_post_power_up(struct rockchip_hdptx_phy *hdptx)
+static int hdptx_post_enable_lane(struct rockchip_hdptx_phy *hdptx)
+{
+	u32 val = 0;
+	int i;
+
+	reset_control_deassert(hdptx->lane_reset);
+
+	val = (HDPTX_I_BIAS_EN | HDPTX_I_BGR_EN) << 16 | HDPTX_I_BIAS_EN |
+		HDPTX_I_BGR_EN;
+	hdptx_grf_write(hdptx, GRF_HDPTX_CON0, val);
+
+	/* 3 lanes frl mode */
+	if (hdptx->rate == FRL_6G_3LANES || hdptx->rate == FRL_3G_3LANES)
+		hdptx_write(hdptx, LNTOP_REG0207, 0x07);
+	else
+		hdptx_write(hdptx, LNTOP_REG0207, 0x0f);
+
+	for (i = 0; i < 50; i++) {
+		val = hdptx_grf_read(hdptx, GRF_HDPTX_STATUS);
+
+		if (val & HDPTX_O_PHY_RDY && val & HDPTX_O_PLL_LOCK_DONE)
+			break;
+		udelay(100);
+	}
+
+	if (i == 50) {
+		dev_err(hdptx->dev, "hdptx phy lane can't ready!\n");
+		return -EINVAL;
+	}
+
+	dev_err(hdptx->dev, "hdptx phy lane locked!\n");
+
+	return 0;
+}
+
+static int hdptx_post_enable_pll(struct rockchip_hdptx_phy *hdptx)
 {
 	u32 val = 0;
 	int i;
@@ -882,36 +971,48 @@ static int hdptx_post_power_up(struct rockchip_hdptx_phy *hdptx)
 	for (i = 0; i < 20; i++) {
 		val = hdptx_grf_read(hdptx, GRF_HDPTX_STATUS);
 
-		if (val & HDPTX_O_PLL_LOCK_DONE)
+		if (val & HDPTX_O_PHY_CLK_RDY)
 			break;
 		udelay(20);
 	}
 
 	if (i == 20) {
-		dev_err(hdptx->dev, "hdptx phy can't lock!\n");
+		dev_err(hdptx->dev, "hdptx phy pll can't lock!\n");
 		return -EINVAL;
 	}
 
-	udelay(20);
-
-	reset_control_deassert(hdptx->lane_reset);
-
-	for (i = 0; i < 20; i++) {
-		val = hdptx_grf_read(hdptx, GRF_HDPTX_STATUS);
-
-		if (val & HDPTX_O_PHY_RDY)
-			break;
-		udelay(100);
-	}
-
-	if (i == 20) {
-		dev_err(hdptx->dev, "hdptx phy can't ready!\n");
-		return -EINVAL;
-	}
-
-	dev_err(hdptx->dev, "hdptx phy locked!\n");
+	dev_err(hdptx->dev, "hdptx phy pll locked!\n");
 
 	return 0;
+}
+
+static void hdptx_phy_disable(struct rockchip_hdptx_phy *hdptx)
+{
+	u32 val;
+
+	/* reset phy and apb, or phy locked flag may keep 1 */
+	reset_control_assert(hdptx->phy_reset);
+	udelay(20);
+	reset_control_deassert(hdptx->phy_reset);
+
+	reset_control_assert(hdptx->apb_reset);
+	udelay(20);
+	reset_control_deassert(hdptx->apb_reset);
+
+	hdptx_write(hdptx, LANE_REG0300, 0x82);
+	hdptx_write(hdptx, SB_REG010F, 0xc1);
+	hdptx_write(hdptx, SB_REG0110, 0x1);
+	hdptx_write(hdptx, LANE_REG0301, 0x80);
+	hdptx_write(hdptx, LANE_REG0401, 0x80);
+	hdptx_write(hdptx, LANE_REG0501, 0x80);
+	hdptx_write(hdptx, LANE_REG0601, 0x80);
+
+	reset_control_assert(hdptx->lane_reset);
+	reset_control_assert(hdptx->cmn_reset);
+	reset_control_assert(hdptx->init_reset);
+
+	val = (HDPTX_I_PLL_EN | HDPTX_I_BIAS_EN | HDPTX_I_BGR_EN) << 16;
+	hdptx_grf_write(hdptx, GRF_HDPTX_CON0, val);
 }
 
 static void hdptx_earc_config(struct rockchip_hdptx_phy *hdptx)
@@ -996,27 +1097,117 @@ static void hdptx_earc_config(struct rockchip_hdptx_phy *hdptx)
 	hdptx_update_bits(hdptx, SB_REG0123, SB_READY_MASK, SB_READY(1));
 }
 
-static int hdptx_ropll_tmds_mode_config(struct rockchip_hdptx_phy *hdptx, u32 rate)
+static bool hdptx_phy_clk_pll_calc(unsigned int data_rate,
+				   struct ropll_config *cfg)
 {
-	u32 bit_rate = rate & DATA_RATE_MASK;
-	u8 color_depth = (rate & COLOR_DEPTH_MASK) ? 1 : 0;
-	struct ropll_config *cfg = ropll_tmds_cfg;
+	unsigned int fref = 24000;
+	unsigned int sdc;
+	unsigned int fout = data_rate / 2;
+	unsigned int fvco;
+	u32 mdiv, sdiv, n = 8;
+	unsigned long k = 0, lc, k_sub, lc_sub;
 
+	for (sdiv = 16; sdiv >= 1; sdiv--) {
+		if (sdiv % 2 && sdiv != 1)
+			continue;
+
+		fvco = fout * sdiv;
+
+		if (fvco < 2000000 || fvco > 4000000)
+			continue;
+
+		mdiv = DIV_ROUND_UP(fvco, fref);
+		if (mdiv < 20 || mdiv > 255)
+			continue;
+
+		if (fref * mdiv - fvco) {
+			for (sdc = 264000; sdc <= 750000; sdc += fref)
+				if (sdc * n > fref * mdiv)
+					break;
+
+			if (sdc > 750000)
+				continue;
+
+			rational_best_approximation(fref * mdiv - fvco,
+						    sdc / 16,
+						    GENMASK(6, 0),
+						    GENMASK(7, 0),
+						    &k, &lc);
+
+			rational_best_approximation(sdc * n - fref * mdiv,
+						    sdc,
+						    GENMASK(6, 0),
+						    GENMASK(7, 0),
+						    &k_sub, &lc_sub);
+		}
+
+		break;
+	}
+
+	if (sdiv < 1)
+		return false;
+
+	if (cfg) {
+		cfg->pms_mdiv = mdiv;
+		cfg->pms_mdiv_afc = mdiv;
+		cfg->pms_pdiv = 1;
+		cfg->pms_refdiv = 1;
+		cfg->pms_sdiv = sdiv - 1;
+
+		cfg->sdm_en = k > 0 ? 1 : 0;
+		if (cfg->sdm_en) {
+			cfg->sdm_deno = lc;
+			cfg->sdm_num_sign = 1;
+			cfg->sdm_num = k;
+			cfg->sdc_n = n - 3;
+			cfg->sdc_num = k_sub;
+			cfg->sdc_deno = lc_sub;
+		}
+	}
+
+	return true;
+}
+
+static int hdptx_ropll_cmn_config(struct rockchip_hdptx_phy *hdptx, unsigned long bit_rate)
+{
+	int bus_width = phy_get_bus_width(hdptx->phy);
+	u8 color_depth = (bus_width & COLOR_DEPTH_MASK) ? 1 : 0;
+	struct ropll_config *cfg = ropll_tmds_cfg;
+	struct ropll_config rc = {0};
+
+	dev_info(hdptx->dev, "%s bus_width:%x rate:%lu\n", __func__, bus_width, bit_rate);
+	hdptx->rate = bit_rate * 100;
+
+	if (color_depth)
+		bit_rate = bit_rate * 10 / 8;
 
 	for (; cfg->bit_rate != ~0; cfg++)
 		if (bit_rate == cfg->bit_rate)
 			break;
 
 	if (cfg->bit_rate == ~0) {
-		dev_err(hdptx->dev, "%s can't find pll cfg\n", __func__);
-		return -EINVAL;
+		if (hdptx_phy_clk_pll_calc(bit_rate, &rc)) {
+			cfg = &rc;
+		} else {
+			dev_err(hdptx->dev, "%s can't find pll cfg\n", __func__);
+			return -EINVAL;
+		}
 	}
+
+	dev_dbg(hdptx->dev, "mdiv=%u, sdiv=%u\n",
+		cfg->pms_mdiv, cfg->pms_sdiv + 1);
+	dev_dbg(hdptx->dev, "sdm_en=%u, k_sign=%u, k=%u, lc=%u",
+		cfg->sdm_en, cfg->sdm_num_sign, cfg->sdm_num, cfg->sdm_deno);
+	dev_dbg(hdptx->dev, "n=%u, k_sub=%u, lc_sub=%u\n",
+		cfg->sdc_n + 3, cfg->sdc_num, cfg->sdc_deno);
 
 	hdptx_pre_power_up(hdptx);
 
 	reset_control_assert(hdptx->ropll_reset);
-	usleep_range(10, 20);
+	udelay(20);
 	reset_control_deassert(hdptx->ropll_reset);
+
+	hdptx_grf_write(hdptx, GRF_HDPTX_CON0, LC_REF_CLK_SEL << 16);
 
 	hdptx_write(hdptx, CMN_REG0008, 0x00);
 	hdptx_write(hdptx, CMN_REG0009, 0x0c);
@@ -1078,9 +1269,9 @@ static int hdptx_ropll_tmds_mode_config(struct rockchip_hdptx_phy *hdptx, u32 ra
 	hdptx_write(hdptx, CMN_REG0043, 0x00);
 	hdptx_write(hdptx, CMN_REG0044, 0x46);
 	hdptx_write(hdptx, CMN_REG0045, 0x24);
-	hdptx_write(hdptx, CMN_REG0046, 0xff);
+	hdptx_write(hdptx, CMN_REG0046, 0xdd);
 	hdptx_write(hdptx, CMN_REG0047, 0x00);
-	hdptx_write(hdptx, CMN_REG0048, 0x44);
+	hdptx_write(hdptx, CMN_REG0048, 0x11);
 	hdptx_write(hdptx, CMN_REG0049, 0xfa);
 	hdptx_write(hdptx, CMN_REG004A, 0x08);
 	hdptx_write(hdptx, CMN_REG004B, 0x00);
@@ -1143,7 +1334,9 @@ static int hdptx_ropll_tmds_mode_config(struct rockchip_hdptx_phy *hdptx, u32 ra
 		       PLL_PCG_POSTDIV_SEL(cfg->pms_sdiv));
 
 	hdptx_update_bits(hdptx, CMN_REG0086, PLL_PCG_CLK_SEL_MASK,
-		       PLL_PCG_CLK_SEL(color_depth));
+			  PLL_PCG_CLK_SEL(color_depth));
+
+	hdptx_update_bits(hdptx, CMN_REG0086, PLL_PCG_CLK_EN, PLL_PCG_CLK_EN);
 
 	hdptx_write(hdptx, CMN_REG0087, 0x04);
 	hdptx_write(hdptx, CMN_REG0089, 0x00);
@@ -1162,6 +1355,14 @@ static int hdptx_ropll_tmds_mode_config(struct rockchip_hdptx_phy *hdptx, u32 ra
 	hdptx_write(hdptx, CMN_REG0099, 0x04);
 	hdptx_write(hdptx, CMN_REG009A, 0x11);
 	hdptx_write(hdptx, CMN_REG009B, 0x00);
+
+	return hdptx_post_enable_pll(hdptx);
+}
+
+static int hdptx_ropll_tmds_mode_config(struct rockchip_hdptx_phy *hdptx, u32 rate)
+{
+	u32 bit_rate = rate & DATA_RATE_MASK;
+
 	hdptx_write(hdptx, SB_REG0114, 0x00);
 	hdptx_write(hdptx, SB_REG0115, 0x00);
 	hdptx_write(hdptx, SB_REG0116, 0x00);
@@ -1185,7 +1386,6 @@ static int hdptx_ropll_tmds_mode_config(struct rockchip_hdptx_phy *hdptx, u32 ra
 	}
 
 	hdptx_write(hdptx, LNTOP_REG0206, 0x07);
-	hdptx_write(hdptx, LNTOP_REG0207, 0x0f);
 	hdptx_write(hdptx, LANE_REG0303, 0x0c);
 	hdptx_write(hdptx, LANE_REG0307, 0x20);
 	hdptx_write(hdptx, LANE_REG030A, 0x17);
@@ -1247,34 +1447,48 @@ static int hdptx_ropll_tmds_mode_config(struct rockchip_hdptx_phy *hdptx, u32 ra
 	hdptx_write(hdptx, LANE_REG061F, 0x15);
 	hdptx_write(hdptx, LANE_REG0620, 0xa0);
 
+	hdptx_write(hdptx, LANE_REG0303, 0x2f);
+	hdptx_write(hdptx, LANE_REG0403, 0x2f);
+	hdptx_write(hdptx, LANE_REG0503, 0x2f);
+	hdptx_write(hdptx, LANE_REG0603, 0x2f);
+	hdptx_write(hdptx, LANE_REG0305, 0x03);
+	hdptx_write(hdptx, LANE_REG0405, 0x03);
+	hdptx_write(hdptx, LANE_REG0505, 0x03);
+	hdptx_write(hdptx, LANE_REG0605, 0x03);
+	hdptx_write(hdptx, LANE_REG0306, 0x1c);
+	hdptx_write(hdptx, LANE_REG0406, 0x1c);
+	hdptx_write(hdptx, LANE_REG0506, 0x1c);
+	hdptx_write(hdptx, LANE_REG0606, 0x1c);
+
 	if (hdptx->earc_en)
 		hdptx_earc_config(hdptx);
 
-	return hdptx_post_power_up(hdptx);
+	return hdptx_post_enable_lane(hdptx);
 }
 
-static int hdptx_ropll_frl_mode_config(struct rockchip_hdptx_phy *hdptx, u32 rate)
+static int hdptx_lcpll_ropll_cmn_config(struct rockchip_hdptx_phy *hdptx, unsigned long rate)
 {
-	u32 bit_rate = rate & DATA_RATE_MASK;
-	u8 color_depth = (rate & COLOR_DEPTH_MASK) ? 1 : 0;
-	struct ropll_config *cfg = ropll_frl_cfg;
+	u32 val;
 
-	for (; cfg->bit_rate != ~0; cfg++)
-		if (bit_rate == cfg->bit_rate)
-			break;
+	dev_info(hdptx->dev, "%s rate:%lu\n", __func__, rate);
 
-	if (cfg->bit_rate == ~0) {
-		dev_err(hdptx->dev, "%s can't find pll cfg\n", __func__);
-		return -EINVAL;
-	}
+	hdptx->rate = rate * 100;
 
 	hdptx_pre_power_up(hdptx);
 
 	reset_control_assert(hdptx->ropll_reset);
-	usleep_range(10, 20);
+	udelay(20);
 	reset_control_deassert(hdptx->ropll_reset);
 
-	hdptx_write(hdptx, CMN_REG0008, 0x00);
+	reset_control_assert(hdptx->lcpll_reset);
+	udelay(20);
+	reset_control_deassert(hdptx->lcpll_reset);
+
+	/* ROPLL input reference clock from LCPLL (cascade mode) */
+	val = (LC_REF_CLK_SEL << 16) | LC_REF_CLK_SEL;
+	hdptx_grf_write(hdptx, GRF_HDPTX_CON0, val);
+
+	hdptx_write(hdptx, CMN_REG0008, 0xd0);
 	hdptx_write(hdptx, CMN_REG0009, 0x0c);
 	hdptx_write(hdptx, CMN_REG000A, 0x83);
 	hdptx_write(hdptx, CMN_REG000B, 0x06);
@@ -1296,35 +1510,36 @@ static int hdptx_ropll_frl_mode_config(struct rockchip_hdptx_phy *hdptx, u32 rat
 	hdptx_write(hdptx, CMN_REG001B, 0x00);
 	hdptx_write(hdptx, CMN_REG001C, 0x01);
 	hdptx_write(hdptx, CMN_REG001D, 0x64);
-	hdptx_write(hdptx, CMN_REG001E, 0x14);
+	hdptx_write(hdptx, CMN_REG001E, 0x35);
 	hdptx_write(hdptx, CMN_REG001F, 0x00);
-	hdptx_write(hdptx, CMN_REG0020, 0x00);
-	hdptx_write(hdptx, CMN_REG0021, 0x00);
+	hdptx_write(hdptx, CMN_REG0020, 0x6b);
+	hdptx_write(hdptx, CMN_REG0021, 0x6b);
 	hdptx_write(hdptx, CMN_REG0022, 0x11);
-	hdptx_write(hdptx, CMN_REG0023, 0x00);
-	hdptx_write(hdptx, CMN_REG0025, 0x00);
+	hdptx_write(hdptx, CMN_REG0024, 0x00);
+	hdptx_write(hdptx, CMN_REG0025, 0x10);
 	hdptx_write(hdptx, CMN_REG0026, 0x53);
-	hdptx_write(hdptx, CMN_REG0027, 0x00);
-	hdptx_write(hdptx, CMN_REG0028, 0x00);
+	hdptx_write(hdptx, CMN_REG0027, 0x15);
+	hdptx_write(hdptx, CMN_REG0028, 0x0d);
 	hdptx_write(hdptx, CMN_REG0029, 0x01);
-	hdptx_write(hdptx, CMN_REG002A, 0x01);
-	hdptx_write(hdptx, CMN_REG002B, 0x00);
-	hdptx_write(hdptx, CMN_REG002C, 0x00);
-	hdptx_write(hdptx, CMN_REG002D, 0x00);
-	hdptx_write(hdptx, CMN_REG002E, 0x00);
-	hdptx_write(hdptx, CMN_REG002F, 0x04);
+	hdptx_write(hdptx, CMN_REG002A, 0x09);
+	hdptx_write(hdptx, CMN_REG002B, 0x01);
+	hdptx_write(hdptx, CMN_REG002C, 0x02);
+	hdptx_write(hdptx, CMN_REG002D, 0x02);
+	hdptx_write(hdptx, CMN_REG002E, 0x0d);
+	hdptx_write(hdptx, CMN_REG002F, 0x61);
 	hdptx_write(hdptx, CMN_REG0030, 0x00);
 	hdptx_write(hdptx, CMN_REG0031, 0x20);
 	hdptx_write(hdptx, CMN_REG0032, 0x30);
 	hdptx_write(hdptx, CMN_REG0033, 0x0b);
 	hdptx_write(hdptx, CMN_REG0034, 0x23);
 	hdptx_write(hdptx, CMN_REG0035, 0x00);
+	hdptx_write(hdptx, CMN_REG0037, 0x00);
 	hdptx_write(hdptx, CMN_REG0038, 0x00);
 	hdptx_write(hdptx, CMN_REG0039, 0x00);
 	hdptx_write(hdptx, CMN_REG003A, 0x00);
 	hdptx_write(hdptx, CMN_REG003B, 0x00);
 	hdptx_write(hdptx, CMN_REG003C, 0x80);
-	hdptx_write(hdptx, CMN_REG003D, 0x40);
+	hdptx_write(hdptx, CMN_REG003D, 0xc0);
 	hdptx_write(hdptx, CMN_REG003E, 0x0c);
 	hdptx_write(hdptx, CMN_REG003F, 0x83);
 	hdptx_write(hdptx, CMN_REG0040, 0x06);
@@ -1344,33 +1559,27 @@ static int hdptx_ropll_frl_mode_config(struct rockchip_hdptx_phy *hdptx, u32 rat
 	hdptx_write(hdptx, CMN_REG004E, 0x14);
 	hdptx_write(hdptx, CMN_REG004F, 0x00);
 	hdptx_write(hdptx, CMN_REG0050, 0x00);
-	hdptx_write(hdptx, CMN_REG0051, cfg->pms_mdiv);
-	hdptx_write(hdptx, CMN_REG0055, cfg->pms_mdiv_afc);
-	hdptx_write(hdptx, CMN_REG0059, (cfg->pms_pdiv << 4) | cfg->pms_refdiv);
-	hdptx_write(hdptx, CMN_REG005A, (cfg->pms_sdiv << 4));
+	hdptx_write(hdptx, CMN_REG0054, 0x19);
+	hdptx_write(hdptx, CMN_REG0058, 0x19);
+	hdptx_write(hdptx, CMN_REG0059, 0x11);
+	hdptx_write(hdptx, CMN_REG005B, 0x30);
 	hdptx_write(hdptx, CMN_REG005C, 0x25);
-	hdptx_write(hdptx, CMN_REG005D, 0x0c);
-	hdptx_update_bits(hdptx, CMN_REG005E, ROPLL_SDM_EN_MASK,
-			  ROPLL_SDM_EN(cfg->sdm_en));
-	if (!cfg->sdm_en)
-		hdptx_update_bits(hdptx, CMN_REG005E, 0xf, 0);
+	hdptx_write(hdptx, CMN_REG005D, 0x14);
+	hdptx_write(hdptx, CMN_REG005E, 0x0e);
 	hdptx_write(hdptx, CMN_REG005F, 0x01);
-	hdptx_update_bits(hdptx, CMN_REG0064, ROPLL_SDM_NUM_SIGN_RBR_MASK,
-		       ROPLL_SDM_NUM_SIGN_RBR(cfg->sdm_num_sign));
-	hdptx_write(hdptx, CMN_REG0065, cfg->sdm_num);
-	hdptx_write(hdptx, CMN_REG0060, cfg->sdm_deno);
-	hdptx_update_bits(hdptx, CMN_REG0069, ROPLL_SDC_N_RBR_MASK,
-		       ROPLL_SDC_N_RBR(cfg->sdc_n));
-	hdptx_write(hdptx, CMN_REG006C, cfg->sdc_num);
-	hdptx_write(hdptx, CMN_REG0070, cfg->sdc_deno);
-	hdptx_write(hdptx, CMN_REG006B, 0x04);
-	hdptx_write(hdptx, CMN_REG0073, 0x30);
+	hdptx_write(hdptx, CMN_REG0063, 0x01);
+	hdptx_write(hdptx, CMN_REG0064, 0x0e);
+	hdptx_write(hdptx, CMN_REG0068, 0x00);
+	hdptx_write(hdptx, CMN_REG0069, 0x02);
+	hdptx_write(hdptx, CMN_REG006B, 0x00);
+	hdptx_write(hdptx, CMN_REG006F, 0x00);
+	hdptx_write(hdptx, CMN_REG0073, 0x02);
 	hdptx_write(hdptx, CMN_REG0074, 0x00);
 	hdptx_write(hdptx, CMN_REG0075, 0x20);
 	hdptx_write(hdptx, CMN_REG0076, 0x30);
 	hdptx_write(hdptx, CMN_REG0077, 0x08);
 	hdptx_write(hdptx, CMN_REG0078, 0x0c);
-	hdptx_write(hdptx, CMN_REG0079, 0x00);
+	hdptx_write(hdptx, CMN_REG007A, 0x00);
 	hdptx_write(hdptx, CMN_REG007B, 0x00);
 	hdptx_write(hdptx, CMN_REG007C, 0x00);
 	hdptx_write(hdptx, CMN_REG007D, 0x00);
@@ -1382,11 +1591,7 @@ static int hdptx_ropll_frl_mode_config(struct rockchip_hdptx_phy *hdptx, u32 rat
 	hdptx_write(hdptx, CMN_REG0083, 0x24);
 	hdptx_write(hdptx, CMN_REG0084, 0x20);
 	hdptx_write(hdptx, CMN_REG0085, 0x03);
-	hdptx_write(hdptx, CMN_REG0086, 0x01);
-	hdptx_update_bits(hdptx, CMN_REG0086, PLL_PCG_POSTDIV_SEL_MASK,
-			  PLL_PCG_POSTDIV_SEL(cfg->pms_sdiv));
-	hdptx_update_bits(hdptx, CMN_REG0086, PLL_PCG_CLK_SEL_MASK,
-			  PLL_PCG_CLK_SEL(color_depth));
+	hdptx_write(hdptx, CMN_REG0086, 0x11);
 	hdptx_write(hdptx, CMN_REG0087, 0x0c);
 	hdptx_write(hdptx, CMN_REG0089, 0x00);
 	hdptx_write(hdptx, CMN_REG008A, 0x55);
@@ -1399,101 +1604,44 @@ static int hdptx_ropll_frl_mode_config(struct rockchip_hdptx_phy *hdptx, u32 rat
 	hdptx_write(hdptx, CMN_REG0091, 0x00);
 	hdptx_write(hdptx, CMN_REG0092, 0x00);
 	hdptx_write(hdptx, CMN_REG0093, 0x00);
-	hdptx_write(hdptx, CMN_REG0094, 0x00);
-	hdptx_write(hdptx, CMN_REG0097, 0x02);
-	hdptx_write(hdptx, CMN_REG0099, 0x04);
+	hdptx_write(hdptx, CMN_REG0095, 0x03);
+	hdptx_write(hdptx, CMN_REG0097, 0x00);
+	hdptx_write(hdptx, CMN_REG0099, 0x00);
 	hdptx_write(hdptx, CMN_REG009A, 0x11);
 	hdptx_write(hdptx, CMN_REG009B, 0x10);
-	hdptx_write(hdptx, SB_REG0114, 0x00);
-	hdptx_write(hdptx, SB_REG0115, 0x00);
-	hdptx_write(hdptx, SB_REG0116, 0x00);
-	hdptx_write(hdptx, SB_REG0117, 0x00);
-	hdptx_write(hdptx, LNTOP_REG0200, 0x04);
-	hdptx_write(hdptx, LNTOP_REG0201, 0x00);
-	hdptx_write(hdptx, LNTOP_REG0202, 0x00);
-	hdptx_write(hdptx, LNTOP_REG0203, 0xf0);
-	hdptx_write(hdptx, LNTOP_REG0204, 0xff);
-	hdptx_write(hdptx, LNTOP_REG0205, 0xff);
-	hdptx_write(hdptx, LNTOP_REG0206, 0x05);
-	hdptx_write(hdptx, LNTOP_REG0207, 0x0f);
-	hdptx_write(hdptx, LANE_REG0303, 0x0c);
-	hdptx_write(hdptx, LANE_REG0307, 0x20);
-	hdptx_write(hdptx, LANE_REG030A, 0x17);
-	hdptx_write(hdptx, LANE_REG030B, 0x77);
-	hdptx_write(hdptx, LANE_REG030C, 0x77);
-	hdptx_write(hdptx, LANE_REG030D, 0x77);
-	hdptx_write(hdptx, LANE_REG030E, 0x38);
-	hdptx_write(hdptx, LANE_REG0310, 0x03);
-	hdptx_write(hdptx, LANE_REG0311, 0x0f);
-	hdptx_write(hdptx, LANE_REG0312, 0x3c);
-	hdptx_write(hdptx, LANE_REG0316, 0x02);
-	hdptx_write(hdptx, LANE_REG031B, 0x01);
-	hdptx_write(hdptx, LANE_REG031F, 0x15);
-	hdptx_write(hdptx, LANE_REG0320, 0xa0);
-	hdptx_write(hdptx, LANE_REG0403, 0x0c);
-	hdptx_write(hdptx, LANE_REG0407, 0x20);
-	hdptx_write(hdptx, LANE_REG040A, 0x17);
-	hdptx_write(hdptx, LANE_REG040B, 0x77);
-	hdptx_write(hdptx, LANE_REG040C, 0x77);
-	hdptx_write(hdptx, LANE_REG040D, 0x77);
-	hdptx_write(hdptx, LANE_REG040E, 0x38);
-	hdptx_write(hdptx, LANE_REG0410, 0x03);
-	hdptx_write(hdptx, LANE_REG0411, 0x0f);
-	hdptx_write(hdptx, LANE_REG0412, 0x3c);
-	hdptx_write(hdptx, LANE_REG0416, 0x02);
-	hdptx_write(hdptx, LANE_REG041B, 0x01);
-	hdptx_write(hdptx, LANE_REG041F, 0x15);
-	hdptx_write(hdptx, LANE_REG0420, 0xa0);
-	hdptx_write(hdptx, LANE_REG0503, 0x0c);
-	hdptx_write(hdptx, LANE_REG0507, 0x20);
-	hdptx_write(hdptx, LANE_REG050A, 0x17);
-	hdptx_write(hdptx, LANE_REG050B, 0x77);
-	hdptx_write(hdptx, LANE_REG050C, 0x77);
-	hdptx_write(hdptx, LANE_REG050D, 0x77);
-	hdptx_write(hdptx, LANE_REG050E, 0x38);
-	hdptx_write(hdptx, LANE_REG0510, 0x03);
-	hdptx_write(hdptx, LANE_REG0511, 0x0f);
-	hdptx_write(hdptx, LANE_REG0512, 0x3c);
-	hdptx_write(hdptx, LANE_REG0516, 0x02);
-	hdptx_write(hdptx, LANE_REG051B, 0x01);
-	hdptx_write(hdptx, LANE_REG051F, 0x15);
-	hdptx_write(hdptx, LANE_REG0520, 0xa0);
-	hdptx_write(hdptx, LANE_REG0603, 0x0c);
-	hdptx_write(hdptx, LANE_REG0607, 0x20);
-	hdptx_write(hdptx, LANE_REG060A, 0x17);
-	hdptx_write(hdptx, LANE_REG060B, 0x77);
-	hdptx_write(hdptx, LANE_REG060C, 0x77);
-	hdptx_write(hdptx, LANE_REG060D, 0x77);
-	hdptx_write(hdptx, LANE_REG060E, 0x38);
-	hdptx_write(hdptx, LANE_REG0610, 0x03);
-	hdptx_write(hdptx, LANE_REG0611, 0x0f);
-	hdptx_write(hdptx, LANE_REG0612, 0x3c);
-	hdptx_write(hdptx, LANE_REG0616, 0x02);
-	hdptx_write(hdptx, LANE_REG061B, 0x01);
-	hdptx_write(hdptx, LANE_REG061F, 0x15);
-	hdptx_write(hdptx, LANE_REG0620, 0xa0);
+
+	hdptx_write(hdptx, CMN_REG009E, 0x03);
+	hdptx_write(hdptx, CMN_REG00A0, 0x60);
+	hdptx_write(hdptx, CMN_REG009F, 0xff);
 
 	if (hdptx->earc_en)
 		hdptx_earc_config(hdptx);
 
-	return hdptx_post_power_up(hdptx);
+	return hdptx_post_enable_pll(hdptx);
 }
 
-static int hdptx_lcpll_frl_mode_config(struct rockchip_hdptx_phy *hdptx, u32 rate)
+static int hdptx_lcpll_cmn_config(struct rockchip_hdptx_phy *hdptx, unsigned long rate)
 {
 	u32 bit_rate = rate & DATA_RATE_MASK;
 	u8 color_depth = (rate & COLOR_DEPTH_MASK) ? 1 : 0;
 	struct lcpll_config *cfg = lcpll_cfg;
 
+	dev_info(hdptx->dev, "%s rate:%lu\n", __func__, rate);
+
+	hdptx->rate = bit_rate * 100;
 
 	for (; cfg->bit_rate != ~0; cfg++)
 		if (bit_rate == cfg->bit_rate)
 			break;
 
-	if (cfg->bit_rate == ~0)
+	if (cfg->bit_rate == ~0) {
+		dev_err(hdptx->dev, "can't find frl rate, phy pll init failed\n");
 		return -EINVAL;
+	}
 
 	hdptx_pre_power_up(hdptx);
+
+	hdptx_grf_write(hdptx, GRF_HDPTX_CON0, LC_REF_CLK_SEL << 16);
 
 	hdptx_update_bits(hdptx, CMN_REG0008, LCPLL_EN_MASK |
 		       LCPLL_LCVCO_MODE_EN_MASK, LCPLL_EN(1) |
@@ -1626,6 +1774,12 @@ static int hdptx_lcpll_frl_mode_config(struct rockchip_hdptx_phy *hdptx, u32 rat
 	hdptx_write(hdptx, CMN_REG0099, 0x00);
 	hdptx_write(hdptx, CMN_REG009A, 0x11);
 	hdptx_write(hdptx, CMN_REG009B, 0x10);
+
+	return hdptx_post_enable_pll(hdptx);
+}
+
+static int hdptx_lcpll_ropll_frl_mode_config(struct rockchip_hdptx_phy *hdptx)
+{
 	hdptx_write(hdptx, SB_REG0114, 0x00);
 	hdptx_write(hdptx, SB_REG0115, 0x00);
 	hdptx_write(hdptx, SB_REG0116, 0x00);
@@ -1637,7 +1791,109 @@ static int hdptx_lcpll_frl_mode_config(struct rockchip_hdptx_phy *hdptx, u32 rat
 	hdptx_write(hdptx, LNTOP_REG0204, 0xff);
 	hdptx_write(hdptx, LNTOP_REG0205, 0xff);
 	hdptx_write(hdptx, LNTOP_REG0206, 0x05);
-	hdptx_write(hdptx, LNTOP_REG0207, 0x0f);
+	hdptx_write(hdptx, LANE_REG0303, 0x0c);
+	hdptx_write(hdptx, LANE_REG0307, 0x20);
+	hdptx_write(hdptx, LANE_REG030A, 0x17);
+	hdptx_write(hdptx, LANE_REG030B, 0x77);
+	hdptx_write(hdptx, LANE_REG030C, 0x77);
+	hdptx_write(hdptx, LANE_REG030D, 0x77);
+	hdptx_write(hdptx, LANE_REG030E, 0x38);
+	hdptx_write(hdptx, LANE_REG0310, 0x03);
+	hdptx_write(hdptx, LANE_REG0311, 0x0f);
+	hdptx_write(hdptx, LANE_REG0312, 0x3c);
+	hdptx_write(hdptx, LANE_REG0316, 0x02);
+	hdptx_write(hdptx, LANE_REG031B, 0x01);
+	hdptx_write(hdptx, LANE_REG031F, 0x15);
+	hdptx_write(hdptx, LANE_REG0320, 0xa0);
+	hdptx_write(hdptx, LANE_REG0403, 0x0c);
+	hdptx_write(hdptx, LANE_REG0407, 0x20);
+	hdptx_write(hdptx, LANE_REG040A, 0x17);
+	hdptx_write(hdptx, LANE_REG040B, 0x77);
+	hdptx_write(hdptx, LANE_REG040C, 0x77);
+	hdptx_write(hdptx, LANE_REG040D, 0x77);
+	hdptx_write(hdptx, LANE_REG040E, 0x38);
+	hdptx_write(hdptx, LANE_REG0410, 0x03);
+	hdptx_write(hdptx, LANE_REG0411, 0x0f);
+	hdptx_write(hdptx, LANE_REG0412, 0x3c);
+	hdptx_write(hdptx, LANE_REG0416, 0x02);
+	hdptx_write(hdptx, LANE_REG041B, 0x01);
+	hdptx_write(hdptx, LANE_REG041F, 0x15);
+	hdptx_write(hdptx, LANE_REG0420, 0xa0);
+	hdptx_write(hdptx, LANE_REG0503, 0x0c);
+	hdptx_write(hdptx, LANE_REG0507, 0x20);
+	hdptx_write(hdptx, LANE_REG050A, 0x17);
+	hdptx_write(hdptx, LANE_REG050B, 0x77);
+	hdptx_write(hdptx, LANE_REG050C, 0x77);
+	hdptx_write(hdptx, LANE_REG050D, 0x77);
+	hdptx_write(hdptx, LANE_REG0507, 0x20);
+	hdptx_write(hdptx, LANE_REG050A, 0x17);
+	hdptx_write(hdptx, LANE_REG050B, 0x77);
+	hdptx_write(hdptx, LANE_REG050C, 0x77);
+	hdptx_write(hdptx, LANE_REG050D, 0x77);
+	hdptx_write(hdptx, LANE_REG050E, 0x38);
+	hdptx_write(hdptx, LANE_REG0510, 0x03);
+	hdptx_write(hdptx, LANE_REG0511, 0x0f);
+	hdptx_write(hdptx, LANE_REG0512, 0x3c);
+	hdptx_write(hdptx, LANE_REG0516, 0x02);
+	hdptx_write(hdptx, LANE_REG051B, 0x01);
+	hdptx_write(hdptx, LANE_REG051F, 0x15);
+	hdptx_write(hdptx, LANE_REG0520, 0xa0);
+	hdptx_write(hdptx, LANE_REG0603, 0x0c);
+	hdptx_write(hdptx, LANE_REG0607, 0x20);
+	hdptx_write(hdptx, LANE_REG060A, 0x17);
+	hdptx_write(hdptx, LANE_REG060B, 0x77);
+	hdptx_write(hdptx, LANE_REG060C, 0x77);
+	hdptx_write(hdptx, LANE_REG060D, 0x77);
+	hdptx_write(hdptx, LANE_REG060E, 0x38);
+	hdptx_write(hdptx, LANE_REG0610, 0x03);
+	hdptx_write(hdptx, LANE_REG0611, 0x0f);
+	hdptx_write(hdptx, LANE_REG0612, 0x3c);
+	hdptx_write(hdptx, LANE_REG0616, 0x02);
+	hdptx_write(hdptx, LANE_REG061B, 0x01);
+	hdptx_write(hdptx, LANE_REG061F, 0x15);
+	hdptx_write(hdptx, LANE_REG0620, 0xa0);
+
+	hdptx_write(hdptx, LANE_REG0303, 0x2f);
+	hdptx_write(hdptx, LANE_REG0403, 0x2f);
+	hdptx_write(hdptx, LANE_REG0503, 0x2f);
+	hdptx_write(hdptx, LANE_REG0603, 0x2f);
+	hdptx_write(hdptx, LANE_REG0305, 0x03);
+	hdptx_write(hdptx, LANE_REG0405, 0x03);
+	hdptx_write(hdptx, LANE_REG0505, 0x03);
+	hdptx_write(hdptx, LANE_REG0605, 0x03);
+	hdptx_write(hdptx, LANE_REG0306, 0xfc);
+	hdptx_write(hdptx, LANE_REG0406, 0xfc);
+	hdptx_write(hdptx, LANE_REG0506, 0xfc);
+	hdptx_write(hdptx, LANE_REG0606, 0xfc);
+
+	hdptx_write(hdptx, LANE_REG0305, 0x4f);
+	hdptx_write(hdptx, LANE_REG0405, 0x4f);
+	hdptx_write(hdptx, LANE_REG0505, 0x4f);
+	hdptx_write(hdptx, LANE_REG0605, 0x4f);
+	hdptx_write(hdptx, LANE_REG0304, 0x14);
+	hdptx_write(hdptx, LANE_REG0404, 0x14);
+	hdptx_write(hdptx, LANE_REG0504, 0x14);
+	hdptx_write(hdptx, LANE_REG0604, 0x14);
+
+	if (hdptx->earc_en)
+		hdptx_earc_config(hdptx);
+
+	return hdptx_post_enable_lane(hdptx);
+}
+
+static int hdptx_lcpll_frl_mode_config(struct rockchip_hdptx_phy *hdptx, u32 rate)
+{
+	hdptx_write(hdptx, SB_REG0114, 0x00);
+	hdptx_write(hdptx, SB_REG0115, 0x00);
+	hdptx_write(hdptx, SB_REG0116, 0x00);
+	hdptx_write(hdptx, SB_REG0117, 0x00);
+	hdptx_write(hdptx, LNTOP_REG0200, 0x04);
+	hdptx_write(hdptx, LNTOP_REG0201, 0x00);
+	hdptx_write(hdptx, LNTOP_REG0202, 0x00);
+	hdptx_write(hdptx, LNTOP_REG0203, 0xf0);
+	hdptx_write(hdptx, LNTOP_REG0204, 0xff);
+	hdptx_write(hdptx, LNTOP_REG0205, 0xff);
+	hdptx_write(hdptx, LNTOP_REG0206, 0x05);
 	hdptx_write(hdptx, LANE_REG0303, 0x0c);
 	hdptx_write(hdptx, LANE_REG0307, 0x20);
 	hdptx_write(hdptx, LANE_REG030A, 0x17);
@@ -1695,10 +1951,32 @@ static int hdptx_lcpll_frl_mode_config(struct rockchip_hdptx_phy *hdptx, u32 rat
 	hdptx_write(hdptx, LANE_REG061F, 0x15);
 	hdptx_write(hdptx, LANE_REG0620, 0xa0);
 
+	hdptx_write(hdptx, LANE_REG0303, 0x2f);
+	hdptx_write(hdptx, LANE_REG0403, 0x2f);
+	hdptx_write(hdptx, LANE_REG0503, 0x2f);
+	hdptx_write(hdptx, LANE_REG0603, 0x2f);
+	hdptx_write(hdptx, LANE_REG0305, 0x03);
+	hdptx_write(hdptx, LANE_REG0405, 0x03);
+	hdptx_write(hdptx, LANE_REG0505, 0x03);
+	hdptx_write(hdptx, LANE_REG0605, 0x03);
+	hdptx_write(hdptx, LANE_REG0306, 0xfc);
+	hdptx_write(hdptx, LANE_REG0406, 0xfc);
+	hdptx_write(hdptx, LANE_REG0506, 0xfc);
+	hdptx_write(hdptx, LANE_REG0606, 0xfc);
+
+	hdptx_write(hdptx, LANE_REG0305, 0x4f);
+	hdptx_write(hdptx, LANE_REG0405, 0x4f);
+	hdptx_write(hdptx, LANE_REG0505, 0x4f);
+	hdptx_write(hdptx, LANE_REG0605, 0x4f);
+	hdptx_write(hdptx, LANE_REG0304, 0x14);
+	hdptx_write(hdptx, LANE_REG0404, 0x14);
+	hdptx_write(hdptx, LANE_REG0504, 0x14);
+	hdptx_write(hdptx, LANE_REG0604, 0x14);
+
 	if (hdptx->earc_en)
 		hdptx_earc_config(hdptx);
 
-	return hdptx_post_power_up(hdptx);
+	return hdptx_post_enable_lane(hdptx);
 }
 
 static int rockchip_hdptx_phy_power_on(struct phy *phy)
@@ -1714,10 +1992,10 @@ static int rockchip_hdptx_phy_power_on(struct phy *phy)
 		hdptx->earc_en = false;
 
 	if (bus_width & HDMI_MODE_MASK)
-		if (bit_rate > 24000000)
+		if (bit_rate != (FRL_8G_4LANES / 100))
 			return hdptx_lcpll_frl_mode_config(hdptx, bus_width);
 		else
-			return hdptx_ropll_frl_mode_config(hdptx, bus_width);
+			return hdptx_lcpll_ropll_frl_mode_config(hdptx);
 	else
 		return hdptx_ropll_tmds_mode_config(hdptx, bus_width);
 }
@@ -1726,9 +2004,8 @@ static int rockchip_hdptx_phy_power_off(struct phy *phy)
 {
 	struct rockchip_hdptx_phy *hdptx = phy_get_drvdata(phy);
 
-	hdptx_update_bits(hdptx, CMN_REG0086, ROPLL_SDM_NUM_SIGN_RBR_MASK,
-		       PLL_PCG_CLK_SEL(0));
-	hdptx_write(hdptx, LNTOP_REG0207, 0x00);
+	/* disable phy lane output */
+	hdptx_write(hdptx, LNTOP_REG0207, 0);
 
 	return 0;
 }
@@ -1750,8 +2027,167 @@ static void rockchip_hdptx_phy_runtime_disable(void *data)
 {
 	struct rockchip_hdptx_phy *hdptx = data;
 
-	clk_bulk_disable_unprepare(hdptx->nr_clks, hdptx->clks);
+	clk_bulk_unprepare(hdptx->nr_clks, hdptx->clks);
 	pm_runtime_disable(hdptx->dev);
+}
+
+static unsigned long hdptx_phy_clk_recalc_rate(struct clk_hw *hw,
+					       unsigned long parent_rate)
+{
+	struct rockchip_hdptx_phy *hdptx = to_rockchip_hdptx_phy(hw);
+
+	return hdptx->rate;
+}
+
+static long hdptx_phy_clk_round_rate(struct clk_hw *hw, unsigned long rate,
+					 unsigned long *parent_rate)
+{
+	struct ropll_config *cfg = ropll_tmds_cfg;
+	u32 bit_rate = rate / 100;
+
+	if (rate > HDMI20_MAX_RATE)
+		return rate;
+
+	for (; cfg->bit_rate != ~0; cfg++)
+		if (bit_rate == cfg->bit_rate)
+			break;
+
+	if (cfg->bit_rate == ~0 && !hdptx_phy_clk_pll_calc(bit_rate, NULL))
+		return -EINVAL;
+
+	return rate;
+}
+
+static int hdptx_phy_clk_set_rate(struct clk_hw *hw, unsigned long rate,
+				      unsigned long parent_rate)
+{
+	struct rockchip_hdptx_phy *hdptx = to_rockchip_hdptx_phy(hw);
+
+	if (hdptx_grf_read(hdptx, GRF_HDPTX_STATUS) & HDPTX_O_PLL_LOCK_DONE)
+		hdptx_phy_disable(hdptx);
+
+	if (rate > HDMI20_MAX_RATE) {
+		if  (rate == FRL_8G_4LANES)
+			return hdptx_lcpll_ropll_cmn_config(hdptx, rate / 100);
+		else
+			return hdptx_lcpll_cmn_config(hdptx, rate / 100);
+	} else {
+		return hdptx_ropll_cmn_config(hdptx, rate / 100);
+	}
+}
+
+static int hdptx_phy_clk_enable(struct clk_hw *hw)
+{
+	struct rockchip_hdptx_phy *hdptx = to_rockchip_hdptx_phy(hw);
+	int ret;
+
+	if (hdptx->count) {
+		hdptx->count++;
+		return 0;
+	}
+
+	ret = clk_bulk_enable(hdptx->nr_clks, hdptx->clks);
+	if (ret) {
+		dev_err(hdptx->dev, "failed to enable clocks\n");
+		return ret;
+	}
+
+	if (hdptx->rate) {
+		if (hdptx->rate > HDMI20_MAX_RATE) {
+			if  (hdptx->rate == FRL_8G_4LANES)
+				ret = hdptx_lcpll_ropll_cmn_config(hdptx, hdptx->rate / 100);
+			else
+				ret = hdptx_lcpll_cmn_config(hdptx, hdptx->rate / 100);
+		} else {
+			ret = hdptx_ropll_cmn_config(hdptx, hdptx->rate / 100);
+		}
+	}
+
+	if (!ret)
+		hdptx->count++;
+
+	return ret;
+}
+
+static void hdptx_phy_clk_disable(struct clk_hw *hw)
+{
+	struct rockchip_hdptx_phy *hdptx = to_rockchip_hdptx_phy(hw);
+
+	if (hdptx->count > 1) {
+		hdptx->count--;
+		return;
+	}
+
+	if (hdptx_grf_read(hdptx, GRF_HDPTX_STATUS) & HDPTX_O_PLL_LOCK_DONE)
+		hdptx_phy_disable(hdptx);
+
+	clk_bulk_disable(hdptx->nr_clks, hdptx->clks);
+	hdptx->count--;
+}
+
+static const struct clk_ops hdptx_phy_clk_ops = {
+	.recalc_rate = hdptx_phy_clk_recalc_rate,
+	.round_rate = hdptx_phy_clk_round_rate,
+	.set_rate = hdptx_phy_clk_set_rate,
+	.enable = hdptx_phy_clk_enable,
+	.disable = hdptx_phy_clk_disable,
+};
+
+static int rockchip_hdptx_phy_clk_register(struct rockchip_hdptx_phy *hdptx)
+{
+	struct device *dev = hdptx->dev;
+	struct device_node *np = dev->of_node;
+	struct device_node *clk_np;
+	struct platform_device *pdev;
+	struct clk_init_data init = {};
+	struct clk *refclk;
+	const char *parent_name;
+	int ret;
+
+	clk_np = of_get_child_by_name(np, "clk-port");
+	if (!clk_np)
+		return 0;
+
+	pdev = of_platform_device_create(clk_np, NULL, dev);
+	if (!pdev)
+		return 0;
+
+	refclk = devm_clk_get(dev, "ref");
+	if (IS_ERR(refclk)) {
+		dev_err(dev, "failed to get ref clock\n");
+		return PTR_ERR(refclk);
+	}
+
+	parent_name = __clk_get_name(refclk);
+
+	init.parent_names = &parent_name;
+	init.num_parents = 1;
+	init.flags = CLK_GET_RATE_NOCACHE;
+	if (!hdptx->id)
+		init.name = "clk_hdmiphy_pixel0";
+	else
+		init.name = "clk_hdmiphy_pixel1";
+	init.ops = &hdptx_phy_clk_ops;
+
+	/* optional override of the clock name */
+	of_property_read_string(np, "clock-output-names", &init.name);
+
+	hdptx->hw.init = &init;
+
+	hdptx->dclk = devm_clk_register(&pdev->dev, &hdptx->hw);
+	if (IS_ERR(hdptx->dclk)) {
+		ret = PTR_ERR(hdptx->dclk);
+		dev_err(dev, "failed to register clock: %d\n", ret);
+		return ret;
+	}
+
+	ret = of_clk_add_provider(clk_np, of_clk_src_simple_get, hdptx->dclk);
+	if (ret) {
+		dev_err(dev, "failed to register OF clock provider: %d\n", ret);
+		return ret;
+	}
+
+	return 0;
 }
 
 static int rockchip_hdptx_phy_probe(struct platform_device *pdev)
@@ -1770,6 +2206,10 @@ static int rockchip_hdptx_phy_probe(struct platform_device *pdev)
 
 	hdptx->dev = dev;
 
+	hdptx->id = of_alias_get_id(dev->of_node, "hdptxhdmi");
+	if (hdptx->id < 0)
+		hdptx->id = 0;
+
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	regs = devm_ioremap_resource(dev, res);
 	if (IS_ERR(regs))
@@ -1781,9 +2221,11 @@ static int rockchip_hdptx_phy_probe(struct platform_device *pdev)
 
 	hdptx->nr_clks = ret;
 
-	ret = clk_bulk_prepare_enable(hdptx->nr_clks, hdptx->clks);
-	if (ret)
-		return dev_err_probe(dev, ret, "failed to enable clocks\n");
+	ret = clk_bulk_prepare(hdptx->nr_clks, hdptx->clks);
+	if (ret) {
+		dev_err(hdptx->dev, "failed to prepare clocks\n");
+		return ret;
+	}
 
 	hdptx->regmap = devm_regmap_init_mmio(dev, regs,
 					      &rockchip_hdptx_phy_regmap_config);
@@ -1844,6 +2286,7 @@ static int rockchip_hdptx_phy_probe(struct platform_device *pdev)
 
 	hdptx->grf = syscon_regmap_lookup_by_phandle(np, "rockchip,grf");
 	if (IS_ERR(hdptx->grf)) {
+		ret = PTR_ERR(hdptx->grf);
 		dev_err(hdptx->dev, "Unable to get rockchip,grf\n");
 		goto err_regsmap;
 	}
@@ -1871,12 +2314,20 @@ static int rockchip_hdptx_phy_probe(struct platform_device *pdev)
 		goto err_regsmap;
 	}
 
+	reset_control_deassert(hdptx->apb_reset);
+	reset_control_deassert(hdptx->cmn_reset);
+	reset_control_deassert(hdptx->init_reset);
+
+	ret = rockchip_hdptx_phy_clk_register(hdptx);
+	if (ret)
+		goto err_regsmap;
+
 	platform_set_drvdata(pdev, hdptx);
 	dev_info(dev, "hdptx phy init success\n");
 	return 0;
 
 err_regsmap:
-	clk_bulk_disable_unprepare(hdptx->nr_clks, hdptx->clks);
+	clk_bulk_unprepare(hdptx->nr_clks, hdptx->clks);
 	return ret;
 }
 

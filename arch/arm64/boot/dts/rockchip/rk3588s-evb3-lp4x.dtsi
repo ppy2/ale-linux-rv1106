@@ -7,13 +7,14 @@
 #include "dt-bindings/usb/pd.h"
 #include "rk3588s.dtsi"
 #include "rk3588s-evb.dtsi"
-#include "rk3588-rk806-dual.dtsi"
+#include "rk3588s-rk806-dual.dtsi"
 
 / {
 	combophy_avdd0v85: combophy-avdd0v85 {
 		compatible = "regulator-fixed";
 		regulator-name = "combophy_avdd0v85";
 		regulator-boot-on;
+		regulator-always-on;
 		regulator-min-microvolt = <850000>;
 		regulator-max-microvolt = <850000>;
 		vin-supply = <&vdd_0v85_s0>;
@@ -23,6 +24,7 @@
 		compatible = "regulator-fixed";
 		regulator-name = "combophy_avdd1v8";
 		regulator-boot-on;
+		regulator-always-on;
 		regulator-min-microvolt = <1800000>;
 		regulator-max-microvolt = <1800000>;
 		vin-supply = <&avcc_1v8_s0>;
@@ -32,6 +34,14 @@
 		compatible = "pwm-fan";
 		#cooling-cells = <2>;
 		pwms = <&pwm7 0 50000 0>;
+		cooling-levels = <0 50 100 150 200 255>;
+		rockchip,temp-trips = <
+			50000	1
+			55000	2
+			60000	3
+			65000	4
+			70000	5
+		>;
 	};
 
 	vcc3v3_lcd_n: vcc3v3-lcd0-n {
@@ -124,6 +134,7 @@
 		pinctrl-0 = <&hym8563_int>;
 		interrupt-parent = <&gpio0>;
 		interrupts = <RK_PD4 IRQ_TYPE_LEVEL_LOW>;
+		wakeup-source;
 	};
 };
 
@@ -240,7 +251,7 @@
 		touch_gpio: touch-gpio {
 			rockchip,pins =
 				<1 RK_PB4 RK_FUNC_GPIO &pcfg_pull_up>,
-				<1 RK_PB5 RK_FUNC_GPIO &pcfg_pull_none>;
+				<1 RK_PB5 RK_FUNC_GPIO &pcfg_pull_up>;
 		};
 	};
 
@@ -259,6 +270,16 @@
 	status = "okay";
 };
 
+&route_dsi0 {
+	status = "okay";
+	connect = <&vp3_out_dsi0>;
+};
+
+&route_dsi1 {
+	status = "disabled";
+	connect = <&vp3_out_dsi1>;
+};
+
 &sdmmc {
 	status = "okay";
 	vmmc-supply = <&vcc_3v3_sd_s0>;
@@ -266,6 +287,10 @@
 
 &sata2 {
 	status = "okay";
+};
+
+&u2phy0_otg {
+	rockchip,typec-vbus-det;
 };
 
 &u2phy2 {

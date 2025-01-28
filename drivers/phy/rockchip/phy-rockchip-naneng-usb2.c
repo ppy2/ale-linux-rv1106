@@ -354,7 +354,7 @@ rockchip_usb2phy_clk480m_register(struct rockchip_usb2phy *rphy)
 	/* optional override of the clockname */
 	of_property_read_string(node, "clock-output-names", &init.name);
 
-	if (refclk) {
+	if (!IS_ERR(refclk)) {
 		clk_name = __clk_get_name(refclk);
 		init.parent_names = &clk_name;
 		init.num_parents = 1;
@@ -1671,6 +1671,11 @@ static int rv1126_usb2phy_tuning(struct rockchip_usb2phy *rphy)
 	if (rphy->phy_cfg->reg == 0xff4c8000) {
 		/* set pready_cnt to 1 and rden_cnt to 0 */
 		ret = regmap_write(rphy->grf, 0x1028c, 0x0f0f0100);
+		if (ret)
+			goto out;
+
+		/* Enable host port wakeup irq */
+		ret = regmap_write(rphy->grf, 0x0000, 0x00040004);
 		if (ret)
 			goto out;
 	}

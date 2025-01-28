@@ -33,9 +33,11 @@ struct rockchip_drm_mode_set {
 	unsigned int hue;
 
 	bool mode_changed;
+	bool force_output;
 	int ratio;
 };
 
 void rockchip_drm_show_logo(struct drm_device *drm_dev);
+void rockchip_free_loader_memory(struct drm_device *drm);
 
 #endif

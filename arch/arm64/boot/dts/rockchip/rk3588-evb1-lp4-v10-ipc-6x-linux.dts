@@ -7,7 +7,7 @@
 /dts-v1/;
 
 #include "rk3588-evb1-lp4.dtsi"
-#include "rk3588-linux.dtsi"
+#include "rk3588-ipc.dtsi"
 #include "rk3588-evb1-cam-6x.dtsi"
 
 / {
@@ -67,18 +67,6 @@
 	status = "disabled";
 };
 
-&hdmi0 {
-	status = "disabled";
-};
-
-&hdmi0_in_vp0 {
-	status = "disabled";
-};
-
-&hdmi0_sound {
-	status = "disabled";
-};
-
 &hdmi1 {
 	status = "disabled";
 };
@@ -88,10 +76,6 @@
 };
 
 &hdmi1_sound {
-	status = "disabled";
-};
-
-&hdptxphy_hdmi0 {
 	status = "disabled";
 };
 
@@ -120,10 +104,6 @@
 };
 
 &leds {
-	status = "disabled";
-};
-
-&mipi_dcphy0 {
 	status = "disabled";
 };
 

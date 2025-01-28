@@ -251,6 +251,7 @@ static int jpgdec_run(struct mpp_dev *mpp,
 	u32 i;
 	u32 reg_en;
 	struct jpgdec_task *task = to_jpgdec_task(mpp_task);
+	u32 timing_en = mpp->srv->timing_en;
 
 	mpp_debug_enter();
 
@@ -263,12 +264,20 @@ static int jpgdec_run(struct mpp_dev *mpp,
 
 		mpp_write_req(mpp, task->reg, s, e, reg_en);
 	}
+	/* flush tlb before starting hardware */
+	mpp_iommu_flush_tlb(mpp->iommu_info);
+
 	/* init current task */
 	mpp->cur_task = mpp_task;
+
+	mpp_task_run_begin(mpp_task, timing_en, MPP_WORK_TIMEOUT_DELAY);
+
 	/* Flush the register before the start the device */
 	wmb();
 	mpp_write(mpp, JPGDEC_REG_INT_EN_BASE,
 		  task->reg[reg_en] | JPGDEC_START_EN);
+
+	mpp_task_run_end(mpp_task, timing_en);
 
 	mpp_debug_leave();
 
@@ -374,6 +383,10 @@ static int jpgdec_procfs_init(struct mpp_dev *mpp)
 		dec->procfs = NULL;
 		return -EIO;
 	}
+
+	/* for common mpp_dev options */
+	mpp_procfs_create_common(dec->procfs, mpp);
+
 	mpp_procfs_create_u32("aclk", 0644,
 			      dec->procfs, &dec->aclk_info.debug_rate_hz);
 	mpp_procfs_create_u32("session_buffers", 0644,
@@ -510,13 +523,13 @@ static int jpgdec_reset(struct mpp_dev *mpp)
 		mpp_debug(DEBUG_RESET, "reset in\n");
 
 		/* Don't skip this or iommu won't work after reset */
-		rockchip_pmu_idle_request(mpp->dev, true);
+		mpp_pmu_idle_request(mpp, true);
 		mpp_safe_reset(dec->rst_a);
 		mpp_safe_reset(dec->rst_h);
 		udelay(5);
 		mpp_safe_unreset(dec->rst_a);
 		mpp_safe_unreset(dec->rst_h);
-		rockchip_pmu_idle_request(mpp->dev, false);
+		mpp_pmu_idle_request(mpp, false);
 
 		mpp_debug(DEBUG_RESET, "reset out\n");
 	}
@@ -572,9 +585,9 @@ static int jpgdec_probe(struct platform_device *pdev)
 	dec = devm_kzalloc(dev, sizeof(struct jpgdec_dev), GFP_KERNEL);
 	if (!dec)
 		return -ENOMEM;
-	platform_set_drvdata(pdev, dec);
-
 	mpp = &dec->mpp;
+	platform_set_drvdata(pdev, mpp);
+
 	if (pdev->dev.of_node) {
 		match = of_match_node(mpp_jpgdec_dt_match, pdev->dev.of_node);
 		if (match)
@@ -609,37 +622,19 @@ static int jpgdec_probe(struct platform_device *pdev)
 static int jpgdec_remove(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
-	struct jpgdec_dev *dec = platform_get_drvdata(pdev);
+	struct mpp_dev *mpp = dev_get_drvdata(dev);
 
 	dev_info(dev, "remove device\n");
-	mpp_dev_remove(&dec->mpp);
-	jpgdec_procfs_remove(&dec->mpp);
+	mpp_dev_remove(mpp);
+	jpgdec_procfs_remove(mpp);
 
 	return 0;
-}
-
-static void jpgdec_shutdown(struct platform_device *pdev)
-{
-	int ret;
-	int val;
-	struct device *dev = &pdev->dev;
-	struct jpgdec_dev *dec = platform_get_drvdata(pdev);
-	struct mpp_dev *mpp = &dec->mpp;
-
-	dev_info(dev, "shutdown device\n");
-
-	atomic_inc(&mpp->srv->shutdown_request);
-	ret = readx_poll_timeout(atomic_read,
-				 &mpp->task_count,
-				 val, val == 0, 20000, 200000);
-	if (ret == -ETIMEDOUT)
-		dev_err(dev, "wait total running time out\n");
 }
 
 struct platform_driver rockchip_jpgdec_driver = {
 	.probe = jpgdec_probe,
 	.remove = jpgdec_remove,
-	.shutdown = jpgdec_shutdown,
+	.shutdown = mpp_dev_shutdown,
 	.driver = {
 		.name = JPGDEC_DRIVER_NAME,
 		.of_match_table = of_match_ptr(mpp_jpgdec_dt_match),

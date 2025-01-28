@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note
 /*
  *
- * (C) COPYRIGHT 2011-2021 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2011-2022 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
@@ -77,8 +77,7 @@ static kbasep_js_release_result kbasep_js_runpool_release_ctx_internal(
 		struct kbase_device *kbdev, struct kbase_context *kctx,
 		struct kbasep_js_atom_retained_state *katom_retained_state);
 
-static int kbase_js_get_slot(struct kbase_device *kbdev,
-				struct kbase_jd_atom *katom);
+static unsigned int kbase_js_get_slot(struct kbase_device *kbdev, struct kbase_jd_atom *katom);
 
 static void kbase_js_foreach_ctx_job(struct kbase_context *kctx,
 				     kbasep_js_ctx_job_cb *callback);
@@ -151,8 +150,7 @@ static void kbase_js_sync_timers(struct kbase_device *kbdev)
  *
  * Return: true if there are no atoms to pull, false otherwise.
  */
-static inline bool
-jsctx_rb_none_to_pull_prio(struct kbase_context *kctx, int js, int prio)
+static inline bool jsctx_rb_none_to_pull_prio(struct kbase_context *kctx, unsigned int js, int prio)
 {
 	bool none_to_pull;
 	struct jsctx_queue *rb = &kctx->jsctx_queue[prio][js];
@@ -161,9 +159,8 @@ jsctx_rb_none_to_pull_prio(struct kbase_context *kctx, int js, int prio)
 
 	none_to_pull = RB_EMPTY_ROOT(&rb->runnable_tree);
 
-	dev_dbg(kctx->kbdev->dev,
-		"Slot %d (prio %d) is %spullable in kctx %pK\n",
-		js, prio, none_to_pull ? "not " : "", kctx);
+	dev_dbg(kctx->kbdev->dev, "Slot %u (prio %d) is %spullable in kctx %pK\n", js, prio,
+		none_to_pull ? "not " : "", kctx);
 
 	return none_to_pull;
 }
@@ -179,8 +176,7 @@ jsctx_rb_none_to_pull_prio(struct kbase_context *kctx, int js, int prio)
  * Return: true if the ring buffers for all priorities have no pullable atoms,
  *	   false otherwise.
  */
-static inline bool
-jsctx_rb_none_to_pull(struct kbase_context *kctx, int js)
+static inline bool jsctx_rb_none_to_pull(struct kbase_context *kctx, unsigned int js)
 {
 	int prio;
 
@@ -212,8 +208,8 @@ jsctx_rb_none_to_pull(struct kbase_context *kctx, int js)
  *
  * The HW access lock must always be held when calling this function.
  */
-static void jsctx_queue_foreach_prio(struct kbase_context *kctx, int js,
-				     int prio, kbasep_js_ctx_job_cb *callback)
+static void jsctx_queue_foreach_prio(struct kbase_context *kctx, unsigned int js, int prio,
+				     kbasep_js_ctx_job_cb *callback)
 {
 	struct jsctx_queue *queue = &kctx->jsctx_queue[prio][js];
 
@@ -272,7 +268,7 @@ static void jsctx_queue_foreach_prio(struct kbase_context *kctx, int js,
  * jsctx_queue_foreach_prio() to iterate over the queue and invoke @callback
  * for each entry, and remove the entry from the queue.
  */
-static inline void jsctx_queue_foreach(struct kbase_context *kctx, int js,
+static inline void jsctx_queue_foreach(struct kbase_context *kctx, unsigned int js,
 				       kbasep_js_ctx_job_cb *callback)
 {
 	int prio;
@@ -293,15 +289,14 @@ static inline void jsctx_queue_foreach(struct kbase_context *kctx, int js,
  *
  * Return: Pointer to next atom in buffer, or NULL if there is no atom.
  */
-static inline struct kbase_jd_atom *
-jsctx_rb_peek_prio(struct kbase_context *kctx, int js, int prio)
+static inline struct kbase_jd_atom *jsctx_rb_peek_prio(struct kbase_context *kctx, unsigned int js,
+						       int prio)
 {
 	struct jsctx_queue *rb = &kctx->jsctx_queue[prio][js];
 	struct rb_node *node;
 
 	lockdep_assert_held(&kctx->kbdev->hwaccess_lock);
-	dev_dbg(kctx->kbdev->dev,
-		"Peeking runnable tree of kctx %pK for prio %d (s:%d)\n",
+	dev_dbg(kctx->kbdev->dev, "Peeking runnable tree of kctx %pK for prio %d (s:%u)\n",
 		(void *)kctx, prio, js);
 
 	node = rb_first(&rb->runnable_tree);
@@ -326,8 +321,7 @@ jsctx_rb_peek_prio(struct kbase_context *kctx, int js, int prio)
  *
  * Return: Pointer to next atom in buffer, or NULL if there is no atom.
  */
-static inline struct kbase_jd_atom *
-jsctx_rb_peek(struct kbase_context *kctx, int js)
+static inline struct kbase_jd_atom *jsctx_rb_peek(struct kbase_context *kctx, unsigned int js)
 {
 	int prio;
 
@@ -358,7 +352,7 @@ static inline void
 jsctx_rb_pull(struct kbase_context *kctx, struct kbase_jd_atom *katom)
 {
 	int prio = katom->sched_priority;
-	int js = katom->slot_nr;
+	unsigned int js = katom->slot_nr;
 	struct jsctx_queue *rb = &kctx->jsctx_queue[prio][js];
 
 	lockdep_assert_held(&kctx->kbdev->hwaccess_lock);
@@ -372,28 +366,26 @@ jsctx_rb_pull(struct kbase_context *kctx, struct kbase_jd_atom *katom)
 	rb_erase(&katom->runnable_tree_node, &rb->runnable_tree);
 }
 
-#define LESS_THAN_WRAP(a, b) ((s32)(a - b) < 0)
-
 static void
 jsctx_tree_add(struct kbase_context *kctx, struct kbase_jd_atom *katom)
 {
 	struct kbase_device *kbdev = kctx->kbdev;
 	int prio = katom->sched_priority;
-	int js = katom->slot_nr;
+	unsigned int js = katom->slot_nr;
 	struct jsctx_queue *queue = &kctx->jsctx_queue[prio][js];
 	struct rb_node **new = &(queue->runnable_tree.rb_node), *parent = NULL;
 
 	lockdep_assert_held(&kctx->kbdev->hwaccess_lock);
 
-	dev_dbg(kbdev->dev, "Adding atom %pK to runnable tree of kctx %pK (s:%d)\n",
-		(void *)katom, (void *)kctx, js);
+	dev_dbg(kbdev->dev, "Adding atom %pK to runnable tree of kctx %pK (s:%u)\n", (void *)katom,
+		(void *)kctx, js);
 
 	while (*new) {
 		struct kbase_jd_atom *entry = container_of(*new,
 				struct kbase_jd_atom, runnable_tree_node);
 
 		parent = *new;
-		if (LESS_THAN_WRAP(katom->age, entry->age))
+		if (kbase_jd_atom_is_younger(katom, entry))
 			new = &((*new)->rb_left);
 		else
 			new = &((*new)->rb_right);
@@ -421,18 +413,78 @@ jsctx_rb_unpull(struct kbase_context *kctx, struct kbase_jd_atom *katom)
 {
 	lockdep_assert_held(&kctx->kbdev->hwaccess_lock);
 
+	KBASE_KTRACE_ADD_JM(kctx->kbdev, JS_UNPULL_JOB, kctx, katom, katom->jc,
+			    0u);
+
 	jsctx_tree_add(kctx, katom);
 }
 
-static bool kbase_js_ctx_pullable(struct kbase_context *kctx,
-					int js,
-					bool is_scheduled);
+static bool kbase_js_ctx_pullable(struct kbase_context *kctx, unsigned int js, bool is_scheduled);
 static bool kbase_js_ctx_list_add_pullable_nolock(struct kbase_device *kbdev,
-						struct kbase_context *kctx,
-						int js);
+						  struct kbase_context *kctx, unsigned int js);
 static bool kbase_js_ctx_list_add_unpullable_nolock(struct kbase_device *kbdev,
-						struct kbase_context *kctx,
-						int js);
+						    struct kbase_context *kctx, unsigned int js);
+
+typedef bool(katom_ordering_func)(const struct kbase_jd_atom *,
+				  const struct kbase_jd_atom *);
+
+bool kbase_js_atom_runs_before(struct kbase_device *kbdev,
+			       const struct kbase_jd_atom *katom_a,
+			       const struct kbase_jd_atom *katom_b,
+			       const kbase_atom_ordering_flag_t order_flags)
+{
+	struct kbase_context *kctx_a = katom_a->kctx;
+	struct kbase_context *kctx_b = katom_b->kctx;
+	katom_ordering_func *samectxatomprio_ordering_func =
+		kbase_jd_atom_is_younger;
+
+	lockdep_assert_held(&kbdev->hwaccess_lock);
+
+	if (order_flags & KBASE_ATOM_ORDERING_FLAG_SEQNR)
+		samectxatomprio_ordering_func = kbase_jd_atom_is_earlier;
+
+	/* It only makes sense to make this test for atoms on the same slot */
+	WARN_ON(katom_a->slot_nr != katom_b->slot_nr);
+
+	if (kbdev->js_ctx_scheduling_mode ==
+	    KBASE_JS_PROCESS_LOCAL_PRIORITY_MODE) {
+		/* In local priority mode, querying either way around for "a
+		 * should run before b" and "b should run before a" should
+		 * always be false when they're from different contexts
+		 */
+		if (kctx_a != kctx_b)
+			return false;
+	} else {
+		/* In system priority mode, ordering is done first strictly by
+		 * context priority, even when katom_b might be lower priority
+		 * than katom_a. This is due to scheduling of contexts in order
+		 * of highest priority first, regardless of whether the atoms
+		 * for a particular slot from such contexts have the highest
+		 * priority or not.
+		 */
+		if (kctx_a != kctx_b) {
+			if (kctx_a->priority < kctx_b->priority)
+				return true;
+			if (kctx_a->priority > kctx_b->priority)
+				return false;
+		}
+	}
+
+	/* For same contexts/contexts with the same context priority (in system
+	 * priority mode), ordering is next done by atom priority
+	 */
+	if (katom_a->sched_priority < katom_b->sched_priority)
+		return true;
+	if (katom_a->sched_priority > katom_b->sched_priority)
+		return false;
+	/* For atoms of same priority on the same kctx, they are
+	 * ordered by seq_nr/age (dependent on caller)
+	 */
+	if (kctx_a == kctx_b && samectxatomprio_ordering_func(katom_a, katom_b))
+		return true;
+
+	return false;
+}
 
 /*
  * Functions private to KBase ('Protected' functions)
@@ -475,6 +527,7 @@ int kbasep_js_devdata_init(struct kbase_device * const kbdev)
 	jsdd->hard_stop_ticks_dumping = DEFAULT_JS_HARD_STOP_TICKS_DUMPING;
 	jsdd->gpu_reset_ticks_ss = DEFAULT_JS_RESET_TICKS_SS;
 	jsdd->gpu_reset_ticks_cl = DEFAULT_JS_RESET_TICKS_CL;
+
 	jsdd->gpu_reset_ticks_dumping = DEFAULT_JS_RESET_TICKS_DUMPING;
 	jsdd->ctx_timeslice_ns = DEFAULT_JS_CTX_TIMESLICE_NS;
 	atomic_set(&jsdd->soft_job_timeout_ms, DEFAULT_JS_SOFT_JOB_TIMEOUT);
@@ -558,6 +611,7 @@ void kbasep_js_devdata_term(struct kbase_device *kbdev)
 {
 	struct kbasep_js_device_data *js_devdata;
 	s8 zero_ctx_attr_ref_count[KBASEP_JS_CTX_ATTR_COUNT] = { 0, };
+	CSTD_UNUSED(js_devdata);
 
 	KBASE_DEBUG_ASSERT(kbdev != NULL);
 
@@ -575,14 +629,13 @@ void kbasep_js_devdata_term(struct kbase_device *kbdev)
 
 int kbasep_js_kctx_init(struct kbase_context *const kctx)
 {
-	struct kbase_device *kbdev;
 	struct kbasep_js_kctx_info *js_kctx_info;
 	int i, j;
+	CSTD_UNUSED(js_kctx_info);
 
 	KBASE_DEBUG_ASSERT(kctx != NULL);
 
-	kbdev = kctx->kbdev;
-	KBASE_DEBUG_ASSERT(kbdev != NULL);
+	kbase_ctx_sched_init_ctx(kctx);
 
 	for (i = 0; i < BASE_JM_MAX_NR_SLOTS; ++i)
 		INIT_LIST_HEAD(&kctx->jctx.sched_info.ctx.ctx_list_entry[i]);
@@ -622,9 +675,10 @@ void kbasep_js_kctx_term(struct kbase_context *kctx)
 {
 	struct kbase_device *kbdev;
 	struct kbasep_js_kctx_info *js_kctx_info;
-	int js;
+	unsigned int js;
 	bool update_ctx_count = false;
 	unsigned long flags;
+	CSTD_UNUSED(js_kctx_info);
 
 	KBASE_DEBUG_ASSERT(kctx != NULL);
 
@@ -660,6 +714,149 @@ void kbasep_js_kctx_term(struct kbase_context *kctx)
 		kbase_backend_ctx_count_changed(kbdev);
 		mutex_unlock(&kbdev->js_data.runpool_mutex);
 	}
+
+	kbase_ctx_sched_remove_ctx(kctx);
+}
+
+/*
+ * Priority blocking management functions
+ */
+
+/* Should not normally use directly - use kbase_jsctx_slot_atom_pulled_dec() instead */
+static void kbase_jsctx_slot_prio_blocked_clear(struct kbase_context *kctx, unsigned int js,
+						int sched_prio)
+{
+	struct kbase_jsctx_slot_tracking *slot_tracking =
+		&kctx->slot_tracking[js];
+
+	lockdep_assert_held(&kctx->kbdev->hwaccess_lock);
+
+	slot_tracking->blocked &= ~(((kbase_js_prio_bitmap_t)1) << sched_prio);
+	KBASE_KTRACE_ADD_JM_SLOT_INFO(kctx->kbdev, JS_SLOT_PRIO_UNBLOCKED, kctx,
+				      NULL, 0, js, (unsigned int)sched_prio);
+}
+
+static int kbase_jsctx_slot_atoms_pulled(struct kbase_context *kctx, unsigned int js)
+{
+	return atomic_read(&kctx->slot_tracking[js].atoms_pulled);
+}
+
+/*
+ * A priority level on a slot is blocked when:
+ * - that priority level is blocked
+ * - or, any higher priority level is blocked
+ */
+static bool kbase_jsctx_slot_prio_is_blocked(struct kbase_context *kctx, unsigned int js,
+					     int sched_prio)
+{
+	struct kbase_jsctx_slot_tracking *slot_tracking =
+		&kctx->slot_tracking[js];
+	kbase_js_prio_bitmap_t prio_bit, higher_prios_mask;
+
+	lockdep_assert_held(&kctx->kbdev->hwaccess_lock);
+
+	/* done in two separate shifts to prevent future undefined behavior
+	 * should the number of priority levels == (bit width of the type)
+	 */
+	prio_bit = (((kbase_js_prio_bitmap_t)1) << sched_prio);
+	/* all bits of sched_prio or higher, with sched_prio = 0 being the
+	 * highest priority
+	 */
+	higher_prios_mask = (prio_bit << 1) - 1u;
+	return (slot_tracking->blocked & higher_prios_mask) != 0u;
+}
+
+/**
+ * kbase_jsctx_slot_atom_pulled_inc - Increase counts of atoms that have being
+ *                                    pulled for a slot from a ctx, based on
+ *                                    this atom
+ * @kctx: kbase context
+ * @katom: atom pulled
+ *
+ * Manages counts of atoms pulled (including per-priority-level counts), for
+ * later determining when a ctx can become unblocked on a slot.
+ *
+ * Once a slot has been blocked at @katom's priority level, it should not be
+ * pulled from, hence this function should not be called in that case.
+ *
+ * The return value is to aid tracking of when @kctx becomes runnable.
+ *
+ * Return: new total count of atoms pulled from all slots on @kctx
+ */
+static int kbase_jsctx_slot_atom_pulled_inc(struct kbase_context *kctx,
+					    const struct kbase_jd_atom *katom)
+{
+	unsigned int js = katom->slot_nr;
+	int sched_prio = katom->sched_priority;
+	struct kbase_jsctx_slot_tracking *slot_tracking =
+		&kctx->slot_tracking[js];
+	int nr_atoms_pulled;
+
+	lockdep_assert_held(&kctx->kbdev->hwaccess_lock);
+
+	WARN(kbase_jsctx_slot_prio_is_blocked(kctx, js, sched_prio),
+	     "Should not have pulled atoms for slot %u from a context that is blocked at priority %d or higher",
+	     js, sched_prio);
+
+	nr_atoms_pulled = atomic_inc_return(&kctx->atoms_pulled_all_slots);
+	atomic_inc(&slot_tracking->atoms_pulled);
+	slot_tracking->atoms_pulled_pri[sched_prio]++;
+
+	return nr_atoms_pulled;
+}
+
+/**
+ * kbase_jsctx_slot_atom_pulled_dec- Decrease counts of atoms that have being
+ *                                   pulled for a slot from a ctx, and
+ *                                   re-evaluate whether a context is blocked
+ *                                   on this slot
+ * @kctx: kbase context
+ * @katom: atom that has just been removed from a job slot
+ *
+ * @kctx can become unblocked on a slot for a priority level when it no longer
+ * has any pulled atoms at that priority level on that slot, and all higher
+ * (numerically lower) priority levels are also unblocked @kctx on that
+ * slot. The latter condition is to retain priority ordering within @kctx.
+ *
+ * Return: true if the slot was previously blocked but has now become unblocked
+ * at @katom's priority level, false otherwise.
+ */
+static bool kbase_jsctx_slot_atom_pulled_dec(struct kbase_context *kctx,
+					     const struct kbase_jd_atom *katom)
+{
+	unsigned int js = katom->slot_nr;
+	int sched_prio = katom->sched_priority;
+	int atoms_pulled_pri;
+	struct kbase_jsctx_slot_tracking *slot_tracking =
+		&kctx->slot_tracking[js];
+	bool slot_prio_became_unblocked = false;
+
+	lockdep_assert_held(&kctx->kbdev->hwaccess_lock);
+
+	atomic_dec(&kctx->atoms_pulled_all_slots);
+	atomic_dec(&slot_tracking->atoms_pulled);
+
+	atoms_pulled_pri = --(slot_tracking->atoms_pulled_pri[sched_prio]);
+
+	/* We can safely clear this priority level's blocked status even if
+	 * higher priority levels are still blocked: a subsequent query to
+	 * kbase_jsctx_slot_prio_is_blocked() will still return true
+	 */
+	if (!atoms_pulled_pri &&
+	    kbase_jsctx_slot_prio_is_blocked(kctx, js, sched_prio)) {
+		kbase_jsctx_slot_prio_blocked_clear(kctx, js, sched_prio);
+
+		if (!kbase_jsctx_slot_prio_is_blocked(kctx, js, sched_prio))
+			slot_prio_became_unblocked = true;
+	}
+
+	if (slot_prio_became_unblocked)
+		KBASE_KTRACE_ADD_JM_SLOT_INFO(kctx->kbdev,
+					      JS_SLOT_PRIO_AND_HIGHER_UNBLOCKED,
+					      kctx, katom, katom->jc, js,
+					      (unsigned int)sched_prio);
+
+	return slot_prio_became_unblocked;
 }
 
 /**
@@ -676,14 +873,12 @@ void kbasep_js_kctx_term(struct kbase_context *kctx)
  * Return: true if caller should call kbase_backend_ctx_count_changed()
  */
 static bool kbase_js_ctx_list_add_pullable_nolock(struct kbase_device *kbdev,
-						struct kbase_context *kctx,
-						int js)
+						  struct kbase_context *kctx, unsigned int js)
 {
 	bool ret = false;
 
 	lockdep_assert_held(&kbdev->hwaccess_lock);
-	dev_dbg(kbdev->dev, "Add pullable tail kctx %pK (s:%d)\n",
-		(void *)kctx, js);
+	dev_dbg(kbdev->dev, "Add pullable tail kctx %pK (s:%u)\n", (void *)kctx, js);
 
 	if (!list_empty(&kctx->jctx.sched_info.ctx.ctx_list_entry[js]))
 		list_del_init(&kctx->jctx.sched_info.ctx.ctx_list_entry[js]);
@@ -694,7 +889,7 @@ static bool kbase_js_ctx_list_add_pullable_nolock(struct kbase_device *kbdev,
 	if (!kctx->slots_pullable) {
 		kbdev->js_data.nr_contexts_pullable++;
 		ret = true;
-		if (!atomic_read(&kctx->atoms_pulled)) {
+		if (!kbase_jsctx_atoms_pulled(kctx)) {
 			WARN_ON(kbase_ctx_flag(kctx, KCTX_RUNNABLE_REF));
 			kbase_ctx_flag_set(kctx, KCTX_RUNNABLE_REF);
 			atomic_inc(&kbdev->js_data.nr_contexts_runnable);
@@ -718,14 +913,13 @@ static bool kbase_js_ctx_list_add_pullable_nolock(struct kbase_device *kbdev,
  *
  * Return:  true if caller should call kbase_backend_ctx_count_changed()
  */
-static bool kbase_js_ctx_list_add_pullable_head_nolock(
-		struct kbase_device *kbdev, struct kbase_context *kctx, int js)
+static bool kbase_js_ctx_list_add_pullable_head_nolock(struct kbase_device *kbdev,
+						       struct kbase_context *kctx, unsigned int js)
 {
 	bool ret = false;
 
 	lockdep_assert_held(&kbdev->hwaccess_lock);
-	dev_dbg(kbdev->dev, "Add pullable head kctx %pK (s:%d)\n",
-		(void *)kctx, js);
+	dev_dbg(kbdev->dev, "Add pullable head kctx %pK (s:%u)\n", (void *)kctx, js);
 
 	if (!list_empty(&kctx->jctx.sched_info.ctx.ctx_list_entry[js]))
 		list_del_init(&kctx->jctx.sched_info.ctx.ctx_list_entry[js]);
@@ -736,7 +930,7 @@ static bool kbase_js_ctx_list_add_pullable_head_nolock(
 	if (!kctx->slots_pullable) {
 		kbdev->js_data.nr_contexts_pullable++;
 		ret = true;
-		if (!atomic_read(&kctx->atoms_pulled)) {
+		if (!kbase_jsctx_atoms_pulled(kctx)) {
 			WARN_ON(kbase_ctx_flag(kctx, KCTX_RUNNABLE_REF));
 			kbase_ctx_flag_set(kctx, KCTX_RUNNABLE_REF);
 			atomic_inc(&kbdev->js_data.nr_contexts_runnable);
@@ -763,8 +957,7 @@ static bool kbase_js_ctx_list_add_pullable_head_nolock(
  * Return:  true if caller should call kbase_backend_ctx_count_changed()
  */
 static bool kbase_js_ctx_list_add_pullable_head(struct kbase_device *kbdev,
-						struct kbase_context *kctx,
-						int js)
+						struct kbase_context *kctx, unsigned int js)
 {
 	bool ret;
 	unsigned long flags;
@@ -794,14 +987,12 @@ static bool kbase_js_ctx_list_add_pullable_head(struct kbase_device *kbdev,
  * Return:  true if caller should call kbase_backend_ctx_count_changed()
  */
 static bool kbase_js_ctx_list_add_unpullable_nolock(struct kbase_device *kbdev,
-						struct kbase_context *kctx,
-						int js)
+						    struct kbase_context *kctx, unsigned int js)
 {
 	bool ret = false;
 
 	lockdep_assert_held(&kbdev->hwaccess_lock);
-	dev_dbg(kbdev->dev, "Add unpullable tail kctx %pK (s:%d)\n",
-		(void *)kctx, js);
+	dev_dbg(kbdev->dev, "Add unpullable tail kctx %pK (s:%u)\n", (void *)kctx, js);
 
 	list_move_tail(&kctx->jctx.sched_info.ctx.ctx_list_entry[js],
 		&kbdev->js_data.ctx_list_unpullable[js][kctx->priority]);
@@ -809,7 +1000,7 @@ static bool kbase_js_ctx_list_add_unpullable_nolock(struct kbase_device *kbdev,
 	if (kctx->slots_pullable == (1 << js)) {
 		kbdev->js_data.nr_contexts_pullable--;
 		ret = true;
-		if (!atomic_read(&kctx->atoms_pulled)) {
+		if (!kbase_jsctx_atoms_pulled(kctx)) {
 			WARN_ON(!kbase_ctx_flag(kctx, KCTX_RUNNABLE_REF));
 			kbase_ctx_flag_clear(kctx, KCTX_RUNNABLE_REF);
 			atomic_dec(&kbdev->js_data.nr_contexts_runnable);
@@ -836,9 +1027,8 @@ static bool kbase_js_ctx_list_add_unpullable_nolock(struct kbase_device *kbdev,
  *
  * Return:  true if caller should call kbase_backend_ctx_count_changed()
  */
-static bool kbase_js_ctx_list_remove_nolock(struct kbase_device *kbdev,
-					struct kbase_context *kctx,
-					int js)
+static bool kbase_js_ctx_list_remove_nolock(struct kbase_device *kbdev, struct kbase_context *kctx,
+					    unsigned int js)
 {
 	bool ret = false;
 
@@ -851,7 +1041,7 @@ static bool kbase_js_ctx_list_remove_nolock(struct kbase_device *kbdev,
 	if (kctx->slots_pullable == (1 << js)) {
 		kbdev->js_data.nr_contexts_pullable--;
 		ret = true;
-		if (!atomic_read(&kctx->atoms_pulled)) {
+		if (!kbase_jsctx_atoms_pulled(kctx)) {
 			WARN_ON(!kbase_ctx_flag(kctx, KCTX_RUNNABLE_REF));
 			kbase_ctx_flag_clear(kctx, KCTX_RUNNABLE_REF);
 			atomic_dec(&kbdev->js_data.nr_contexts_runnable);
@@ -874,9 +1064,8 @@ static bool kbase_js_ctx_list_remove_nolock(struct kbase_device *kbdev,
  * Return:  Context to use for specified slot.
  *          NULL if no contexts present for specified slot
  */
-static struct kbase_context *kbase_js_ctx_list_pop_head_nolock(
-						struct kbase_device *kbdev,
-						int js)
+static struct kbase_context *kbase_js_ctx_list_pop_head_nolock(struct kbase_device *kbdev,
+							       unsigned int js)
 {
 	struct kbase_context *kctx;
 	int i;
@@ -892,9 +1081,8 @@ static struct kbase_context *kbase_js_ctx_list_pop_head_nolock(
 				jctx.sched_info.ctx.ctx_list_entry[js]);
 
 		list_del_init(&kctx->jctx.sched_info.ctx.ctx_list_entry[js]);
-		dev_dbg(kbdev->dev,
-			"Popped %pK from the pullable queue (s:%d)\n",
-			(void *)kctx, js);
+		dev_dbg(kbdev->dev, "Popped %pK from the pullable queue (s:%u)\n", (void *)kctx,
+			js);
 		return kctx;
 	}
 	return NULL;
@@ -909,8 +1097,7 @@ static struct kbase_context *kbase_js_ctx_list_pop_head_nolock(
  * Return:  Context to use for specified slot.
  *          NULL if no contexts present for specified slot
  */
-static struct kbase_context *kbase_js_ctx_list_pop_head(
-		struct kbase_device *kbdev, int js)
+static struct kbase_context *kbase_js_ctx_list_pop_head(struct kbase_device *kbdev, unsigned int js)
 {
 	struct kbase_context *kctx;
 	unsigned long flags;
@@ -934,8 +1121,7 @@ static struct kbase_context *kbase_js_ctx_list_pop_head(
  * Return:         true if context can be pulled from on specified slot
  *                 false otherwise
  */
-static bool kbase_js_ctx_pullable(struct kbase_context *kctx, int js,
-					bool is_scheduled)
+static bool kbase_js_ctx_pullable(struct kbase_context *kctx, unsigned int js, bool is_scheduled)
 {
 	struct kbasep_js_device_data *js_devdata;
 	struct kbase_jd_atom *katom;
@@ -954,13 +1140,15 @@ static bool kbase_js_ctx_pullable(struct kbase_context *kctx, int js,
 	}
 	katom = jsctx_rb_peek(kctx, js);
 	if (!katom) {
-		dev_dbg(kbdev->dev, "JS: No pullable atom in kctx %pK (s:%d)\n",
-			(void *)kctx, js);
+		dev_dbg(kbdev->dev, "JS: No pullable atom in kctx %pK (s:%u)\n", (void *)kctx, js);
 		return false; /* No pullable atoms */
 	}
-	if (kctx->blocked_js[js][katom->sched_priority]) {
+	if (kbase_jsctx_slot_prio_is_blocked(kctx, js, katom->sched_priority)) {
+		KBASE_KTRACE_ADD_JM_SLOT_INFO(
+			kctx->kbdev, JS_SLOT_PRIO_IS_BLOCKED, kctx, katom,
+			katom->jc, js, (unsigned int)katom->sched_priority);
 		dev_dbg(kbdev->dev,
-			"JS: kctx %pK is blocked from submitting atoms at priority %d (s:%d)\n",
+			"JS: kctx %pK is blocked from submitting atoms at priority %d and lower (s:%u)\n",
 			(void *)kctx, katom->sched_priority, js);
 		return false;
 	}
@@ -981,14 +1169,14 @@ static bool kbase_js_ctx_pullable(struct kbase_context *kctx, int js,
 		if ((katom->atom_flags & KBASE_KATOM_FLAG_FAIL_BLOCKER) &&
 			kbase_backend_nr_atoms_on_slot(kctx->kbdev, js)) {
 			dev_dbg(kbdev->dev,
-				"JS: Atom %pK has cross-slot fail dependency and atoms on slot (s:%d)\n",
+				"JS: Atom %pK has cross-slot fail dependency and atoms on slot (s:%u)\n",
 				(void *)katom, js);
 			return false;
 		}
 	}
 
-	dev_dbg(kbdev->dev, "JS: Atom %pK is pullable in kctx %pK (s:%d)\n",
-		(void *)katom, (void *)kctx, js);
+	dev_dbg(kbdev->dev, "JS: Atom %pK is pullable in kctx %pK (s:%u)\n", (void *)katom,
+		(void *)kctx, js);
 
 	return true;
 }
@@ -999,7 +1187,7 @@ static bool kbase_js_dep_validate(struct kbase_context *kctx,
 	struct kbase_device *kbdev = kctx->kbdev;
 	bool ret = true;
 	bool has_dep = false, has_x_dep = false;
-	int js = kbase_js_get_slot(kbdev, katom);
+	unsigned int js = kbase_js_get_slot(kbdev, katom);
 	int prio = katom->sched_priority;
 	int i;
 
@@ -1007,7 +1195,7 @@ static bool kbase_js_dep_validate(struct kbase_context *kctx,
 		struct kbase_jd_atom *dep_atom = katom->dep[i].atom;
 
 		if (dep_atom) {
-			int dep_js = kbase_js_get_slot(kbdev, dep_atom);
+			unsigned int dep_js = kbase_js_get_slot(kbdev, dep_atom);
 			int dep_prio = dep_atom->sched_priority;
 
 			dev_dbg(kbdev->dev,
@@ -1162,7 +1350,7 @@ static bool kbase_js_dep_validate(struct kbase_context *kctx,
 void kbase_js_set_ctx_priority(struct kbase_context *kctx, int new_priority)
 {
 	struct kbase_device *kbdev = kctx->kbdev;
-	int js;
+	unsigned int js;
 
 	lockdep_assert_held(&kbdev->hwaccess_lock);
 
@@ -1593,6 +1781,7 @@ static kbasep_js_release_result kbasep_js_runpool_release_ctx_internal(
 	bool runpool_ctx_attr_change = false;
 	int kctx_as_nr;
 	int new_ref_count;
+	CSTD_UNUSED(kctx_as_nr);
 
 	KBASE_DEBUG_ASSERT(kbdev != NULL);
 	KBASE_DEBUG_ASSERT(kctx != NULL);
@@ -1867,9 +2056,8 @@ void kbase_js_set_timeouts(struct kbase_device *kbdev)
 	kbase_backend_timeouts_changed(kbdev);
 }
 
-static bool kbasep_js_schedule_ctx(struct kbase_device *kbdev,
-					struct kbase_context *kctx,
-					int js)
+static bool kbasep_js_schedule_ctx(struct kbase_device *kbdev, struct kbase_context *kctx,
+				   unsigned int js)
 {
 	struct kbasep_js_device_data *js_devdata;
 	struct kbasep_js_kctx_info *js_kctx_info;
@@ -1877,7 +2065,7 @@ static bool kbasep_js_schedule_ctx(struct kbase_device *kbdev,
 	bool kctx_suspended = false;
 	int as_nr;
 
-	dev_dbg(kbdev->dev, "Scheduling kctx %pK (s:%d)\n", kctx, js);
+	dev_dbg(kbdev->dev, "Scheduling kctx %pK (s:%u)\n", kctx, js);
 
 	js_devdata = &kbdev->js_data;
 	js_kctx_info = &kctx->jctx.sched_info;
@@ -1904,8 +2092,8 @@ static bool kbasep_js_schedule_ctx(struct kbase_device *kbdev,
 			WARN_ON(as_nr == KBASEP_AS_NR_INVALID);
 		}
 	}
-	if (as_nr == KBASEP_AS_NR_INVALID)
-		return false; /* No address spaces currently available */
+	if ((as_nr < 0) || (as_nr >= BASE_MAX_NR_AS))
+		return false; /* No address space currently available */
 
 	/*
 	 * Atomic transaction on the Context and Run Pool begins
@@ -1976,6 +2164,7 @@ static bool kbasep_js_schedule_ctx(struct kbase_device *kbdev,
 #endif
 		/* Cause it to leave at some later point */
 		bool retained;
+		CSTD_UNUSED(retained);
 
 		retained = kbase_ctx_sched_inc_refcount_nolock(kctx);
 		KBASE_DEBUG_ASSERT(retained);
@@ -2011,9 +2200,8 @@ static bool kbasep_js_schedule_ctx(struct kbase_device *kbdev,
 	return true;
 }
 
-static bool kbase_js_use_ctx(struct kbase_device *kbdev,
-				struct kbase_context *kctx,
-				int js)
+static bool kbase_js_use_ctx(struct kbase_device *kbdev, struct kbase_context *kctx,
+			     unsigned int js)
 {
 	unsigned long flags;
 
@@ -2021,9 +2209,7 @@ static bool kbase_js_use_ctx(struct kbase_device *kbdev,
 
 	if (kbase_ctx_flag(kctx, KCTX_SCHEDULED) &&
 			kbase_backend_use_ctx_sched(kbdev, kctx, js)) {
-
-		dev_dbg(kbdev->dev,
-			"kctx %pK already has ASID - mark as active (s:%d)\n",
+		dev_dbg(kbdev->dev, "kctx %pK already has ASID - mark as active (s:%u)\n",
 			(void *)kctx, js);
 
 		if (kbdev->hwaccess.active_kctx[js] != kctx) {
@@ -2290,8 +2476,7 @@ bool kbase_js_is_atom_valid(struct kbase_device *kbdev,
 	return true;
 }
 
-static int kbase_js_get_slot(struct kbase_device *kbdev,
-				struct kbase_jd_atom *katom)
+static unsigned int kbase_js_get_slot(struct kbase_device *kbdev, struct kbase_jd_atom *katom)
 {
 	if (katom->core_req & BASE_JD_REQ_JOB_SLOT)
 		return katom->jobslot;
@@ -2321,21 +2506,19 @@ bool kbase_js_dep_resolved_submit(struct kbase_context *kctx,
 	/* If slot will transition from unpullable to pullable then add to
 	 * pullable list
 	 */
-	if (jsctx_rb_none_to_pull(kctx, katom->slot_nr)) {
+	if (jsctx_rb_none_to_pull(kctx, katom->slot_nr))
 		enqueue_required = true;
-	} else {
+	else
 		enqueue_required = false;
-	}
 
 	if ((katom->atom_flags & KBASE_KATOM_FLAG_X_DEP_BLOCKED) ||
 			(katom->pre_dep && (katom->pre_dep->atom_flags &
 			KBASE_KATOM_FLAG_JSCTX_IN_X_DEP_LIST))) {
 		int prio = katom->sched_priority;
-		int js = katom->slot_nr;
+		unsigned int js = katom->slot_nr;
 		struct jsctx_queue *queue = &kctx->jsctx_queue[prio][js];
 
-		dev_dbg(kctx->kbdev->dev, "Add atom %pK to X_DEP list (s:%d)\n",
-			(void *)katom, js);
+		dev_dbg(kctx->kbdev->dev, "Add atom %pK to X_DEP list (s:%u)\n", (void *)katom, js);
 
 		list_add_tail(&katom->queue, &queue->x_dep_head);
 		katom->atom_flags |= KBASE_KATOM_FLAG_JSCTX_IN_X_DEP_LIST;
@@ -2426,8 +2609,8 @@ static void kbase_js_move_to_tree(struct kbase_jd_atom *katom)
  *
  * Context: Caller must hold the HW access lock
  */
-static void kbase_js_evict_deps(struct kbase_context *kctx,
-				struct kbase_jd_atom *katom, int js, int prio)
+static void kbase_js_evict_deps(struct kbase_context *kctx, struct kbase_jd_atom *katom,
+				unsigned int js, int prio)
 {
 	struct kbase_jd_atom *x_dep = katom->x_post_dep;
 	struct kbase_jd_atom *next_katom = katom->post_dep;
@@ -2451,15 +2634,15 @@ static void kbase_js_evict_deps(struct kbase_context *kctx,
 			(void *)x_dep);
 
 		/* Fail if it had a data dependency. */
-		if (x_dep->atom_flags & KBASE_KATOM_FLAG_FAIL_BLOCKER) {
+		if (x_dep->atom_flags & KBASE_KATOM_FLAG_FAIL_BLOCKER)
 			x_dep->will_fail_event_code = katom->event_code;
-		}
+
 		if (x_dep->atom_flags & KBASE_KATOM_FLAG_JSCTX_IN_X_DEP_LIST)
 			kbase_js_move_to_tree(x_dep);
 	}
 }
 
-struct kbase_jd_atom *kbase_js_pull(struct kbase_context *kctx, int js)
+struct kbase_jd_atom *kbase_js_pull(struct kbase_context *kctx, unsigned int js)
 {
 	struct kbase_jd_atom *katom;
 	struct kbasep_js_device_data *js_devdata;
@@ -2469,8 +2652,7 @@ struct kbase_jd_atom *kbase_js_pull(struct kbase_context *kctx, int js)
 	KBASE_DEBUG_ASSERT(kctx);
 
 	kbdev = kctx->kbdev;
-	dev_dbg(kbdev->dev, "JS: pulling an atom from kctx %pK (s:%d)\n",
-		(void *)kctx, js);
+	dev_dbg(kbdev->dev, "JS: pulling an atom from kctx %pK (s:%u)\n", (void *)kctx, js);
 
 	js_devdata = &kbdev->js_data;
 	lockdep_assert_held(&kbdev->hwaccess_lock);
@@ -2489,13 +2671,12 @@ struct kbase_jd_atom *kbase_js_pull(struct kbase_context *kctx, int js)
 
 	katom = jsctx_rb_peek(kctx, js);
 	if (!katom) {
-		dev_dbg(kbdev->dev, "JS: No pullable atom in kctx %pK (s:%d)\n",
-			(void *)kctx, js);
+		dev_dbg(kbdev->dev, "JS: No pullable atom in kctx %pK (s:%u)\n", (void *)kctx, js);
 		return NULL;
 	}
-	if (kctx->blocked_js[js][katom->sched_priority]) {
+	if (kbase_jsctx_slot_prio_is_blocked(kctx, js, katom->sched_priority)) {
 		dev_dbg(kbdev->dev,
-			"JS: kctx %pK is blocked from submitting atoms at priority %d (s:%d)\n",
+			"JS: kctx %pK is blocked from submitting atoms at priority %d and lower (s:%u)\n",
 			(void *)kctx, katom->sched_priority, js);
 		return NULL;
 	}
@@ -2509,7 +2690,7 @@ struct kbase_jd_atom *kbase_js_pull(struct kbase_context *kctx, int js)
 	 * not allow multiple runs of fail-dep atoms from the same context to be
 	 * present on the same slot
 	 */
-	if (katom->pre_dep && atomic_read(&kctx->atoms_pulled_slot[js])) {
+	if (katom->pre_dep && kbase_jsctx_slot_atoms_pulled(kctx, js)) {
 		struct kbase_jd_atom *prev_atom =
 				kbase_backend_inspect_tail(kbdev, js);
 
@@ -2529,32 +2710,30 @@ struct kbase_jd_atom *kbase_js_pull(struct kbase_context *kctx, int js)
 		if ((katom->atom_flags & KBASE_KATOM_FLAG_FAIL_BLOCKER) &&
 				kbase_backend_nr_atoms_on_slot(kbdev, js)) {
 			dev_dbg(kbdev->dev,
-				"JS: Atom %pK has cross-slot fail dependency and atoms on slot (s:%d)\n",
+				"JS: Atom %pK has cross-slot fail dependency and atoms on slot (s:%u)\n",
 				(void *)katom, js);
 			return NULL;
 		}
 	}
 
+	KBASE_KTRACE_ADD_JM_SLOT_INFO(kbdev, JS_PULL_JOB, kctx, katom,
+				      katom->jc, js, katom->sched_priority);
 	kbase_ctx_flag_set(kctx, KCTX_PULLED);
 	kbase_ctx_flag_set(kctx, (KCTX_PULLED_SINCE_ACTIVE_JS0 << js));
 
-	pulled = atomic_inc_return(&kctx->atoms_pulled);
+	pulled = kbase_jsctx_slot_atom_pulled_inc(kctx, katom);
 	if (pulled == 1 && !kctx->slots_pullable) {
 		WARN_ON(kbase_ctx_flag(kctx, KCTX_RUNNABLE_REF));
 		kbase_ctx_flag_set(kctx, KCTX_RUNNABLE_REF);
 		atomic_inc(&kbdev->js_data.nr_contexts_runnable);
 	}
-	atomic_inc(&kctx->atoms_pulled_slot[katom->slot_nr]);
-	kctx->atoms_pulled_slot_pri[katom->slot_nr][katom->sched_priority]++;
 	jsctx_rb_pull(kctx, katom);
 
 	kbase_ctx_sched_retain_ctx_refcount(kctx);
 
-	katom->atom_flags |= KBASE_KATOM_FLAG_HOLDING_CTX_REF;
-
 	katom->ticks = 0;
 
-	dev_dbg(kbdev->dev, "JS: successfully pulled atom %pK from kctx %pK (s:%d)\n",
+	dev_dbg(kbdev->dev, "JS: successfully pulled atom %pK from kctx %pK (s:%u)\n",
 		(void *)katom, (void *)kctx, js);
 
 	return katom;
@@ -2773,14 +2952,17 @@ static void js_return_worker(struct work_struct *data)
 	struct kbasep_js_kctx_info *js_kctx_info = &kctx->jctx.sched_info;
 	struct kbasep_js_atom_retained_state retained_state;
 	int js = katom->slot_nr;
-	int prio = katom->sched_priority;
+	bool slot_became_unblocked;
 	bool timer_sync = false;
 	bool context_idle = false;
 	unsigned long flags;
 	base_jd_core_req core_req = katom->core_req;
+	u64 cache_jc = katom->jc;
 
 	dev_dbg(kbdev->dev, "%s for atom %pK with event code 0x%x\n",
 		__func__, (void *)katom, katom->event_code);
+
+	KBASE_KTRACE_ADD_JM(kbdev, JS_RETURN_WORKER, kctx, katom, katom->jc, 0);
 
 	if (katom->event_code != BASE_JD_EVENT_END_RP_DONE)
 		KBASE_TLSTREAM_TL_EVENT_ATOM_SOFTSTOP_EX(kbdev, katom);
@@ -2792,37 +2974,27 @@ static void js_return_worker(struct work_struct *data)
 	mutex_lock(&js_devdata->queue_mutex);
 	mutex_lock(&js_kctx_info->ctx.jsctx_mutex);
 
-	atomic_dec(&kctx->atoms_pulled);
-	atomic_dec(&kctx->atoms_pulled_slot[js]);
-
 	if (katom->event_code != BASE_JD_EVENT_END_RP_DONE)
 		atomic_dec(&katom->blocked);
 
 	spin_lock_irqsave(&kbdev->hwaccess_lock, flags);
 
-	kctx->atoms_pulled_slot_pri[js][katom->sched_priority]--;
+	slot_became_unblocked = kbase_jsctx_slot_atom_pulled_dec(kctx, katom);
 
-	if (!atomic_read(&kctx->atoms_pulled_slot[js]) &&
-			jsctx_rb_none_to_pull(kctx, js))
+	if (!kbase_jsctx_slot_atoms_pulled(kctx, js) &&
+	    jsctx_rb_none_to_pull(kctx, js))
 		timer_sync |= kbase_js_ctx_list_remove_nolock(kbdev, kctx, js);
 
-	/* If this slot has been blocked due to soft-stopped atoms, and all
-	 * atoms have now been processed, then unblock the slot
+	/* If the context is now unblocked on this slot after soft-stopped
+	 * atoms, then only mark it as pullable on this slot if it is not
+	 * idle
 	 */
-	if (!kctx->atoms_pulled_slot_pri[js][prio] &&
-			kctx->blocked_js[js][prio]) {
-		kctx->blocked_js[js][prio] = false;
+	if (slot_became_unblocked && kbase_jsctx_atoms_pulled(kctx) &&
+	    kbase_js_ctx_pullable(kctx, js, true))
+		timer_sync |=
+			kbase_js_ctx_list_add_pullable_nolock(kbdev, kctx, js);
 
-		/* Only mark the slot as pullable if the context is not idle -
-		 * that case is handled below
-		 */
-		if (atomic_read(&kctx->atoms_pulled) &&
-				kbase_js_ctx_pullable(kctx, js, true))
-			timer_sync |= kbase_js_ctx_list_add_pullable_nolock(
-					kbdev, kctx, js);
-	}
-
-	if (!atomic_read(&kctx->atoms_pulled)) {
+	if (!kbase_jsctx_atoms_pulled(kctx)) {
 		dev_dbg(kbdev->dev,
 			"No atoms currently pulled from context %pK\n",
 			(void *)kctx);
@@ -2890,7 +3062,6 @@ static void js_return_worker(struct work_struct *data)
 		mutex_unlock(&kctx->jctx.lock);
 	}
 
-	katom->atom_flags &= ~KBASE_KATOM_FLAG_HOLDING_CTX_REF;
 	dev_dbg(kbdev->dev, "JS: retained state %s finished",
 		kbasep_js_has_atom_finished(&retained_state) ?
 		"has" : "hasn't");
@@ -2903,6 +3074,9 @@ static void js_return_worker(struct work_struct *data)
 	kbase_js_sched_all(kbdev);
 
 	kbase_backend_complete_wq_post_sched(kbdev, core_req);
+
+	KBASE_KTRACE_ADD_JM(kbdev, JS_RETURN_WORKER_END, kctx, NULL, cache_jc,
+			    0);
 
 	dev_dbg(kbdev->dev, "Leaving %s for atom %pK\n",
 		__func__, (void *)katom);
@@ -3113,15 +3287,16 @@ bool kbase_js_complete_atom_wq(struct kbase_context *kctx,
 	spin_lock_irqsave(&kbdev->hwaccess_lock, flags);
 
 	if (katom->atom_flags & KBASE_KATOM_FLAG_JSCTX_IN_TREE) {
+		bool slot_became_unblocked;
+
 		dev_dbg(kbdev->dev, "Atom %pK is in runnable_tree\n",
 			(void *)katom);
 
-		context_idle = !atomic_dec_return(&kctx->atoms_pulled);
-		atomic_dec(&kctx->atoms_pulled_slot[atom_slot]);
-		kctx->atoms_pulled_slot_pri[atom_slot][prio]--;
+		slot_became_unblocked =
+			kbase_jsctx_slot_atom_pulled_dec(kctx, katom);
+		context_idle = !kbase_jsctx_atoms_pulled(kctx);
 
-		if (!atomic_read(&kctx->atoms_pulled) &&
-				!kctx->slots_pullable) {
+		if (!kbase_jsctx_atoms_pulled(kctx) && !kctx->slots_pullable) {
 			WARN_ON(!kbase_ctx_flag(kctx, KCTX_RUNNABLE_REF));
 			kbase_ctx_flag_clear(kctx, KCTX_RUNNABLE_REF);
 			atomic_dec(&kbdev->js_data.nr_contexts_runnable);
@@ -3129,15 +3304,14 @@ bool kbase_js_complete_atom_wq(struct kbase_context *kctx,
 		}
 
 		/* If this slot has been blocked due to soft-stopped atoms, and
-		 * all atoms have now been processed, then unblock the slot
+		 * all atoms have now been processed at this priority level and
+		 * higher, then unblock the slot
 		 */
-		if (!kctx->atoms_pulled_slot_pri[atom_slot][prio]
-				&& kctx->blocked_js[atom_slot][prio]) {
+		if (slot_became_unblocked) {
 			dev_dbg(kbdev->dev,
-				"kctx %pK is no longer blocked from submitting on slot %d at priority %d\n",
+				"kctx %pK is no longer blocked from submitting on slot %d at priority %d or higher\n",
 				(void *)kctx, atom_slot, prio);
 
-			kctx->blocked_js[atom_slot][prio] = false;
 			if (kbase_js_ctx_pullable(kctx, atom_slot, true))
 				timer_sync |=
 					kbase_js_ctx_list_add_pullable_nolock(
@@ -3146,8 +3320,8 @@ bool kbase_js_complete_atom_wq(struct kbase_context *kctx,
 	}
 	WARN_ON(!(katom->atom_flags & KBASE_KATOM_FLAG_JSCTX_IN_TREE));
 
-	if (!atomic_read(&kctx->atoms_pulled_slot[atom_slot]) &&
-			jsctx_rb_none_to_pull(kctx, atom_slot)) {
+	if (!kbase_jsctx_slot_atoms_pulled(kctx, atom_slot) &&
+	    jsctx_rb_none_to_pull(kctx, atom_slot)) {
 		if (!list_empty(
 			&kctx->jctx.sched_info.ctx.ctx_list_entry[atom_slot]))
 			timer_sync |= kbase_js_ctx_list_remove_nolock(
@@ -3160,9 +3334,9 @@ bool kbase_js_complete_atom_wq(struct kbase_context *kctx,
 	 * re-enable submission so that context can be scheduled again.
 	 */
 	if (!kbasep_js_is_submit_allowed(js_devdata, kctx) &&
-					!atomic_read(&kctx->atoms_pulled) &&
-					!kbase_ctx_flag(kctx, KCTX_DYING)) {
-		int js;
+	    !kbase_jsctx_atoms_pulled(kctx) &&
+	    !kbase_ctx_flag(kctx, KCTX_DYING)) {
+		unsigned int js;
 
 		kbasep_js_set_submit_allowed(js_devdata, kctx);
 
@@ -3174,7 +3348,7 @@ bool kbase_js_complete_atom_wq(struct kbase_context *kctx,
 		}
 	} else if (katom->x_post_dep &&
 			kbasep_js_is_submit_allowed(js_devdata, kctx)) {
-		int js;
+		unsigned int js;
 
 		for (js = 0; js < kbdev->gpu_props.num_job_slots; js++) {
 			if (kbase_js_ctx_pullable(kctx, js, true))
@@ -3285,6 +3459,11 @@ struct kbase_jd_atom *kbase_js_complete_atom(struct kbase_jd_atom *katom,
 
 	katom->status = KBASE_JD_ATOM_STATE_HW_COMPLETED;
 	dev_dbg(kbdev->dev, "Atom %pK status to HW completed\n", (void *)katom);
+	if (kbase_is_quick_reset_enabled(kbdev)) {
+		kbdev->num_of_atoms_hw_completed++;
+		if (kbdev->num_of_atoms_hw_completed >= 20)
+			kbase_disable_quick_reset(kbdev);
+	}
 
 	if (katom->event_code != BASE_JD_EVENT_DONE) {
 		kbase_js_evict_deps(kctx, katom, katom->slot_nr,
@@ -3297,7 +3476,9 @@ struct kbase_jd_atom *kbase_js_complete_atom(struct kbase_jd_atom *katom,
 	trace_sysgraph_gpu(SGR_COMPLETE, kctx->id,
 			kbase_jd_atom_id(katom->kctx, katom), katom->slot_nr);
 
+	KBASE_TLSTREAM_TL_JD_DONE_START(kbdev, katom);
 	kbase_jd_done(katom, katom->slot_nr, end_timestamp, 0);
+	KBASE_TLSTREAM_TL_JD_DONE_END(kbdev, katom);
 
 	/* Unblock cross dependency if present */
 	if (x_dep && (katom->event_code == BASE_JD_EVENT_DONE ||
@@ -3397,13 +3578,15 @@ bool kbase_js_atom_blocked_on_x_dep(struct kbase_jd_atom *const katom)
 	return false;
 }
 
-void kbase_js_sched(struct kbase_device *kbdev, int js_mask)
+void kbase_js_sched(struct kbase_device *kbdev, unsigned int js_mask)
 {
 	struct kbasep_js_device_data *js_devdata;
 	struct kbase_context *last_active[BASE_JM_MAX_NR_SLOTS];
 	bool timer_sync = false;
 	bool ctx_waiting[BASE_JM_MAX_NR_SLOTS];
-	int js;
+	unsigned int js;
+
+	KBASE_TLSTREAM_TL_JS_SCHED_START(kbdev, 0);
 
 	dev_dbg(kbdev->dev, "%s kbdev %pK mask 0x%x\n",
 		__func__, (void *)kbdev, (unsigned int)js_mask);
@@ -3430,24 +3613,20 @@ void kbase_js_sched(struct kbase_device *kbdev, int js_mask)
 
 			if (!kctx) {
 				js_mask &= ~(1 << js);
-				dev_dbg(kbdev->dev,
-					"No kctx on pullable list (s:%d)\n",
-					js);
+				dev_dbg(kbdev->dev, "No kctx on pullable list (s:%u)\n", js);
 				break;
 			}
 
 			if (!kbase_ctx_flag(kctx, KCTX_ACTIVE)) {
 				context_idle = true;
 
-				dev_dbg(kbdev->dev,
-					"kctx %pK is not active (s:%d)\n",
-					(void *)kctx, js);
+				dev_dbg(kbdev->dev, "kctx %pK is not active (s:%u)\n", (void *)kctx,
+					js);
 
 				if (kbase_pm_context_active_handle_suspend(
 									kbdev,
 				      KBASE_PM_SUSPEND_HANDLER_DONT_INCREASE)) {
-					dev_dbg(kbdev->dev,
-						"Suspend pending (s:%d)\n", js);
+					dev_dbg(kbdev->dev, "Suspend pending (s:%u)\n", js);
 					/* Suspend pending - return context to
 					 * queue and stop scheduling
 					 */
@@ -3460,6 +3639,8 @@ void kbase_js_sched(struct kbase_device *kbdev, int js_mask)
 					&kctx->jctx.sched_info.ctx.jsctx_mutex);
 					mutex_unlock(&js_devdata->queue_mutex);
 					up(&js_devdata->schedule_sem);
+					KBASE_TLSTREAM_TL_JS_SCHED_END(kbdev,
+									  0);
 					return;
 				}
 				kbase_ctx_flag_set(kctx, KCTX_ACTIVE);
@@ -3503,16 +3684,13 @@ void kbase_js_sched(struct kbase_device *kbdev, int js_mask)
 			kbase_ctx_flag_clear(kctx, KCTX_PULLED);
 
 			if (!kbase_jm_kick(kbdev, 1 << js)) {
-				dev_dbg(kbdev->dev,
-					"No more jobs can be submitted (s:%d)\n",
-					js);
+				dev_dbg(kbdev->dev, "No more jobs can be submitted (s:%u)\n", js);
 				js_mask &= ~(1 << js);
 			}
 			if (!kbase_ctx_flag(kctx, KCTX_PULLED)) {
 				bool pullable;
 
-				dev_dbg(kbdev->dev,
-					"No atoms pulled from kctx %pK (s:%d)\n",
+				dev_dbg(kbdev->dev, "No atoms pulled from kctx %pK (s:%u)\n",
 					(void *)kctx, js);
 
 				pullable = kbase_js_ctx_pullable(kctx, js,
@@ -3596,14 +3774,15 @@ void kbase_js_sched(struct kbase_device *kbdev, int js_mask)
 	for (js = 0; js < BASE_JM_MAX_NR_SLOTS; js++) {
 		if (kbdev->hwaccess.active_kctx[js] == last_active[js] &&
 				ctx_waiting[js]) {
-			dev_dbg(kbdev->dev, "Marking kctx %pK as inactive (s:%d)\n",
-					(void *)last_active[js], js);
+			dev_dbg(kbdev->dev, "Marking kctx %pK as inactive (s:%u)\n",
+				(void *)last_active[js], js);
 			kbdev->hwaccess.active_kctx[js] = NULL;
 		}
 	}
 
 	mutex_unlock(&js_devdata->queue_mutex);
 	up(&js_devdata->schedule_sem);
+	KBASE_TLSTREAM_TL_JS_SCHED_END(kbdev, 0);
 }
 
 void kbase_js_zap_context(struct kbase_context *kctx)
@@ -3667,7 +3846,7 @@ void kbase_js_zap_context(struct kbase_context *kctx)
 	 */
 	if (!kbase_ctx_flag(kctx, KCTX_SCHEDULED)) {
 		unsigned long flags;
-		int js;
+		unsigned int js;
 
 		spin_lock_irqsave(&kbdev->hwaccess_lock, flags);
 		for (js = 0; js < kbdev->gpu_props.num_job_slots; js++) {
@@ -3707,6 +3886,7 @@ void kbase_js_zap_context(struct kbase_context *kctx)
 	} else {
 		unsigned long flags;
 		bool was_retained;
+		CSTD_UNUSED(was_retained);
 
 		/* Case c: didn't evict, but it is scheduled - it's in the Run
 		 * Pool
@@ -3719,7 +3899,7 @@ void kbase_js_zap_context(struct kbase_context *kctx)
 
 		kbasep_js_clear_submit_allowed(js_devdata, kctx);
 
-		/* Retain and (later) release the context whilst it is is now
+		/* Retain and (later) release the context whilst it is now
 		 * disallowed from submitting jobs - ensures that someone
 		 * somewhere will be removing the context later on
 		 */
@@ -3790,7 +3970,7 @@ static void kbase_js_foreach_ctx_job(struct kbase_context *kctx,
 {
 	struct kbase_device *kbdev;
 	unsigned long flags;
-	u32 js;
+	unsigned int js;
 
 	kbdev = kctx->kbdev;
 
@@ -3810,13 +3990,15 @@ base_jd_prio kbase_js_priority_check(struct kbase_device *kbdev, base_jd_prio pr
 {
 	struct priority_control_manager_device *pcm_device = kbdev->pcm_dev;
 	int req_priority, out_priority;
-	base_jd_prio out_jd_priority = priority;
 
-	if (pcm_device)	{
-		req_priority = kbasep_js_atom_prio_to_sched_prio(priority);
-		out_priority = pcm_device->ops.pcm_scheduler_priority_check(pcm_device, current, req_priority);
-		out_jd_priority = kbasep_js_sched_prio_to_atom_prio(out_priority);
-	}
-	return out_jd_priority;
+	req_priority = kbasep_js_atom_prio_to_sched_prio(priority);
+	out_priority = req_priority;
+	/* Does not use pcm defined priority check if PCM not defined or if
+	 * kbasep_js_atom_prio_to_sched_prio returns an error
+	 * (KBASE_JS_ATOM_SCHED_PRIO_INVALID).
+	 */
+	if (pcm_device && (req_priority != KBASE_JS_ATOM_SCHED_PRIO_INVALID))
+		out_priority = pcm_device->ops.pcm_scheduler_priority_check(pcm_device, current,
+									    req_priority);
+	return kbasep_js_sched_prio_to_atom_prio(kbdev, out_priority);
 }
-

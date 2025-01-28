@@ -6,7 +6,7 @@
 
 #include "rk3588s.dtsi"
 #include "rk3588s-evb.dtsi"
-#include "rk3588-rk806-dual.dtsi"
+#include "rk3588s-rk806-dual.dtsi"
 
 / {
 	es7202_sound_micarray: es7202-sound-micarray {
@@ -28,28 +28,39 @@
 
 	es8388_sound: es8388-sound {
 		status = "okay";
-		compatible = "simple-audio-card";
-		simple-audio-card,format = "i2s";
-		simple-audio-card,mclk-fs = <256>;
-		simple-audio-card,name = "rockchip,es8388-codec";
-		simple-audio-card,dai-link@0 {
-			format = "i2s";
-			cpu {
-				sound-dai = <&i2s0_8ch>;
-			};
-			codec {
-				sound-dai = <&es8388>;
-			};
-		};
-	};
-
-	rk_headset: rk-headset {
-		status = "okay";
-		compatible = "rockchip_headset";
-		headset_gpio = <&gpio1 RK_PD0 GPIO_ACTIVE_LOW>;
+		compatible = "rockchip,multicodecs-card";
+		rockchip,card-name = "rockchip-es8388";
+		hp-det-gpio = <&gpio1 RK_PD0 GPIO_ACTIVE_LOW>;
+		io-channels = <&saradc 3>;
+		io-channel-names = "adc-detect";
+		keyup-threshold-microvolt = <1800000>;
+		poll-interval = <100>;
+		spk-con-gpio = <&gpio4 RK_PA5 GPIO_ACTIVE_HIGH>;
+		hp-con-gpio = <&gpio4 RK_PA4 GPIO_ACTIVE_HIGH>;
+		rockchip,format = "i2s";
+		rockchip,mclk-fs = <256>;
+		rockchip,cpu = <&i2s0_8ch>;
+		rockchip,codec = <&es8388>;
+		rockchip,audio-routing =
+			"Headphone", "LOUT1",
+			"Headphone", "ROUT1",
+			"Speaker", "LOUT2",
+			"Speaker", "ROUT2",
+			"Headphone", "Headphone Power",
+			"Headphone", "Headphone Power",
+			"Speaker", "Speaker Power",
+			"Speaker", "Speaker Power",
+			"LINPUT1", "Main Mic",
+			"LINPUT2", "Main Mic",
+			"RINPUT1", "Headset Mic",
+			"RINPUT2", "Headset Mic";
 		pinctrl-names = "default";
 		pinctrl-0 = <&hp_det>;
-		io-channels = <&saradc 3>;
+		play-pause-key {
+			label = "playpause";
+			linux,code = <KEY_PLAYPAUSE>;
+			press-threshold-microvolt = <2000>;
+		};
 	};
 
 	vbus5v0_typec: vbus5v0-typec {
@@ -116,7 +127,7 @@
 };
 
 &dp0 {
-	pinctrl-0 = <&dp1m2_pins>;
+	pinctrl-0 = <&dp0m2_pins>;
 	pinctrl-names = "default";
 	status = "okay";
 };
@@ -733,6 +744,7 @@
 		pinctrl-0 = <&hym8563_int>;
 		interrupt-parent = <&gpio0>;
 		interrupts = <RK_PC4 IRQ_TYPE_LEVEL_LOW>;
+		wakeup-source;
 	};
 };
 
@@ -811,21 +823,19 @@
 		#sound-dai-cells = <0>;
 		compatible = "everest,es8388", "everest,es8323";
 		reg = <0x11>;
-		clocks = <&cru I2S0_8CH_MCLKOUT>;
+		clocks = <&mclkout_i2s0>;
 		clock-names = "mclk";
-		assigned-clocks = <&cru I2S0_8CH_MCLKOUT>;
+		assigned-clocks = <&mclkout_i2s0>;
 		assigned-clock-rates = <12288000>;
 		pinctrl-names = "default";
 		pinctrl-0 = <&i2s0_mclk>;
-		spk-con-gpio = <&gpio4 RK_PA5 GPIO_ACTIVE_HIGH>;
-		hp-con-gpio = <&gpio4 RK_PA4 GPIO_ACTIVE_HIGH>;
-		extcon = <&rk_headset>;
 	};
 
 	es7202: es7202@32 {
 		status = "okay";
 		#sound-dai-cells = <0>;
 		compatible = "ES7202_PDM_ADC_1";
+		power-supply = <&vcc_1v8_s0>;	/* only 1v8 or 3v3, default is 3v3 */
 		reg = <0x32>;
 	};
 };
@@ -880,7 +890,7 @@
 		touch_gpio: touch-gpio {
 			rockchip,pins =
 				<4 RK_PB2 RK_FUNC_GPIO &pcfg_pull_up>,
-				<4 RK_PB4 RK_FUNC_GPIO &pcfg_pull_none>;
+				<4 RK_PB4 RK_FUNC_GPIO &pcfg_pull_up>;
 		};
 	};
 
@@ -901,6 +911,16 @@
 
 &pwm7 {
 	status = "okay";
+};
+
+&route_dsi0 {
+	status = "disabled";
+	connect = <&vp3_out_dsi0>;
+};
+
+&route_dsi1 {
+	status = "okay";
+	connect = <&vp3_out_dsi1>;
 };
 
 &sata0 {
@@ -924,8 +944,9 @@
 };
 
 &usbdrd_dwc3_0 {
-	dr_mode = "peripheral";
+	dr_mode = "otg";
 	phys = <&u2phy0_otg>;
 	phy-names = "usb2-phy";
 	maximum-speed = "high-speed";
+	extcon = <&u2phy0>;
 };

@@ -15,6 +15,7 @@
 #define MAX_TX_BYTES		64
 #define MAX_FIFO_SIZE		64
 #define UART_RFL_16550A		0x21
+#define DW_UART_DMASA		0x2a
 #endif
 
 static void __dma_tx_complete(void *param)
@@ -105,10 +106,19 @@ int serial8250_tx_dma(struct uart_8250_port *p)
 	struct uart_8250_dma		*dma = p->dma;
 	struct circ_buf			*xmit = &p->port.state->xmit;
 	struct dma_async_tx_descriptor	*desc;
+	struct uart_port		*up = &p->port;
 	int ret;
 
-	if (dma->tx_running)
+	if (dma->tx_running) {
+		if (up->x_char) {
+			dmaengine_pause(dma->txchan);
+			uart_xchar_out(up, UART_TX);
+			dmaengine_resume(dma->txchan);
+		}
 		return 0;
+	} else if (up->x_char) {
+		uart_xchar_out(up, UART_TX);
+	}
 
 	if (uart_tx_stopped(&p->port) || uart_circ_empty(xmit)) {
 		/* We have been called from __dma_tx_complete() */
@@ -141,6 +151,10 @@ int serial8250_tx_dma(struct uart_8250_port *p)
 	dma_sync_single_for_device(dma->txchan->device->dev, dma->tx_addr,
 				   UART_XMIT_SIZE, DMA_TO_DEVICE);
 
+#if defined(CONFIG_ARCH_ROCKCHIP) && defined(CONFIG_NO_GKI)
+	/* Clear uart dma request before start dma */
+	serial_port_out(&p->port, DW_UART_DMASA, 0x1);
+#endif
 	dma_async_issue_pending(dma->txchan);
 	if (dma->tx_err) {
 		dma->tx_err = 0;

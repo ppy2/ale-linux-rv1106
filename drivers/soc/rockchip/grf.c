@@ -5,12 +5,104 @@
  * Copyright (c) 2016 Heiko Stuebner <heiko@sntech.de>
  */
 
+#include <linux/bitfield.h>
 #include <linux/err.h>
 #include <linux/mfd/syscon.h>
 #include <linux/module.h>
 #include <linux/of_device.h>
 #include <linux/platform_device.h>
 #include <linux/regmap.h>
+
+struct rockchip_grf;
+
+struct rockchip_grf_funcs {
+	int (*reset)(struct rockchip_grf *grf);
+};
+
+struct rockchip_grf {
+	struct regmap *regmap;
+	const struct rockchip_grf_funcs *funcs;
+};
+
+static int rockchip_edp_phy_grf_probe(struct platform_device *pdev)
+{
+	struct device *dev = &pdev->dev;
+	struct rockchip_grf *grf;
+	int ret;
+
+	grf = devm_kzalloc(dev, sizeof(*grf), GFP_KERNEL);
+	if (!grf)
+		return -ENOMEM;
+
+	grf->funcs = of_device_get_match_data(dev);
+	if (!grf->funcs)
+		return -ENODEV;
+
+	grf->regmap = syscon_node_to_regmap(dev->of_node);
+	if (IS_ERR(grf->regmap)) {
+		ret = PTR_ERR(grf->regmap);
+		dev_err(dev, "failed to get grf: %d\n", ret);
+		return ret;
+	}
+
+	ret = grf->funcs->reset(grf);
+	if (ret)
+		return ret;
+
+	platform_set_drvdata(pdev, grf);
+
+	return 0;
+}
+
+static int __maybe_unused rockchip_edp_phy_grf_resume(struct device *dev)
+{
+	struct rockchip_grf *grf = dev_get_drvdata(dev);
+
+	return grf->funcs->reset(grf);
+}
+
+static const struct dev_pm_ops rockchip_edp_phy_grf_pm_ops = {
+	SET_LATE_SYSTEM_SLEEP_PM_OPS(NULL, rockchip_edp_phy_grf_resume)
+};
+
+static int rk3568_edp_phy_grf_reset(struct rockchip_grf *grf)
+{
+	u32 status;
+	int ret;
+
+	ret = regmap_read(grf->regmap, 0x0030, &status);
+	if (ret < 0)
+		return ret;
+
+	if (!FIELD_GET(0x1, status)) {
+		regmap_write(grf->regmap, 0x0028, 0x00070007);
+		regmap_write(grf->regmap, 0x0000, 0x0ff10ff1);
+	}
+
+	return 0;
+}
+
+static const struct rockchip_grf_funcs rk3568_edp_phy_grf_funcs = {
+	.reset = rk3568_edp_phy_grf_reset,
+};
+
+static const struct of_device_id rockchip_edp_phy_grf_match[] = {
+	{
+		.compatible = "rockchip,rk3568-edp-phy-grf",
+		.data = &rk3568_edp_phy_grf_funcs,
+	},
+	{}
+};
+MODULE_DEVICE_TABLE(of, rockchip_edp_phy_grf_match);
+
+static struct platform_driver rockchip_edp_phy_grf_driver = {
+	.driver = {
+		.name = "rockchip-edp-phy-grf",
+		.of_match_table = rockchip_edp_phy_grf_match,
+		.pm = &rockchip_edp_phy_grf_pm_ops,
+	},
+	.probe = rockchip_edp_phy_grf_probe,
+};
 
 #define HIWORD_UPDATE(val, mask, shift) \
 		((val) << (shift) | (mask) << ((shift) + 16))
@@ -103,9 +195,11 @@ static const struct rockchip_grf_info rk3328_grf __initconst = {
 };
 
 #define RK3308_GRF_SOC_CON3		0x30c
+#define RK3308_GRF_SOC_CON13		0x608
 
 static const struct rockchip_grf_value rk3308_defaults[] __initconst = {
 	{ "uart dma mask", RK3308_GRF_SOC_CON3, HIWORD_UPDATE(0, 0x1f, 10) },
+	{ "uart2 auto switching", RK3308_GRF_SOC_CON13, HIWORD_UPDATE(0, 0x1, 12) },
 };
 
 static const struct rockchip_grf_info rk3308_grf __initconst = {
@@ -133,6 +227,17 @@ static const struct rockchip_grf_value rk3399_defaults[] __initconst = {
 static const struct rockchip_grf_info rk3399_grf __initconst = {
 	.values = rk3399_defaults,
 	.num_values = ARRAY_SIZE(rk3399_defaults),
+};
+
+#define RK3588_SYS_GRF_SOC_CON7		0x031c
+
+static const struct rockchip_grf_value rk3588_sys_grf_defaults[] __initconst = {
+	{ "Connect EDP hpd to IO", RK3588_SYS_GRF_SOC_CON7, HIWORD_UPDATE(0x3, 0x3, 14) },
+};
+
+static const struct rockchip_grf_info rk3588_sys_grf __initconst = {
+	.values = rk3588_sys_grf_defaults,
+	.num_values = ARRAY_SIZE(rk3588_sys_grf_defaults),
 };
 
 #define DELAY_ONE_SECOND		0x16E3600
@@ -190,6 +295,9 @@ static const struct of_device_id rockchip_grf_dt_match[] __initconst = {
 		.compatible = "rockchip,rk3399-grf",
 		.data = (void *)&rk3399_grf,
 	}, {
+		.compatible = "rockchip,rk3588-sys-grf",
+		.data = (void *)&rk3588_sys_grf,
+	}, {
 		.compatible = "rockchip,rv1126-grf",
 		.data = (void *)&rv1126_grf,
 	},
@@ -204,18 +312,24 @@ static int __init rockchip_grf_init(void)
 	struct regmap *grf;
 	int ret, i;
 
+	ret = platform_driver_register(&rockchip_edp_phy_grf_driver);
+	if (ret)
+		return ret;
+
 	np = of_find_matching_node_and_match(NULL, rockchip_grf_dt_match,
 					     &match);
 	if (!np)
-		return -ENODEV;
+		return 0;
 	if (!match || !match->data) {
 		pr_err("%s: missing grf data\n", __func__);
+		of_node_put(np);
 		return -EINVAL;
 	}
 
 	grf_info = match->data;
 
 	grf = syscon_node_to_regmap(np);
+	of_node_put(np);
 	if (IS_ERR(grf)) {
 		pr_err("%s: could not get grf syscon\n", __func__);
 		return PTR_ERR(grf);

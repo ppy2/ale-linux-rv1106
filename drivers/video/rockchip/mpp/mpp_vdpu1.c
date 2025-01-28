@@ -25,6 +25,7 @@
 #include "mpp_debug.h"
 #include "mpp_common.h"
 #include "mpp_iommu.h"
+#include <soc/rockchip/rockchip_iommu.h>
 
 #define VDPU1_DRIVER_NAME		"mpp_vdpu1"
 
@@ -57,6 +58,9 @@
 /* NOTE: Don't enable it or decoding AVC would meet problem at rk3288 */
 #define VDPU1_REG_DEC_EN		0x008
 #define	VDPU1_CLOCK_GATE_EN		BIT(10)
+
+#define VDPU1_REG_SOFT_RESET		0x194
+#define VDPU1_REG_SOFT_RESET_INDEX	(101)
 
 #define VDPU1_REG_SYS_CTRL		0x00c
 #define VDPU1_REG_SYS_CTRL_INDEX	(3)
@@ -263,8 +267,11 @@ static int vdpu_process_reg_fd(struct mpp_session *session,
 			offset = task->reg[idx] >> 10 << 4;
 		}
 		mem_region = mpp_task_attach_fd(&task->mpp_task, fd);
-		if (IS_ERR(mem_region))
+		if (IS_ERR(mem_region)) {
+			mpp_err("reg[%03d]: %08x fd %d attach failed\n",
+				idx, task->reg[idx], fd);
 			goto fail;
+		}
 
 		iova = mem_region->iova;
 		mpp_debug(DEBUG_IOMMU, "DMV[%3d]: %3d => %pad + offset %10d\n",
@@ -387,6 +394,7 @@ static int vdpu_run(struct mpp_dev *mpp,
 	u32 i;
 	u32 reg_en;
 	struct vdpu_task *task = to_vdpu_task(mpp_task);
+	u32 timing_en = mpp->srv->timing_en;
 
 	mpp_debug_enter();
 
@@ -401,12 +409,21 @@ static int vdpu_run(struct mpp_dev *mpp,
 
 		mpp_write_req(mpp, task->reg, s, e, reg_en);
 	}
+
+	/* flush tlb before starting hardware */
+	mpp_iommu_flush_tlb(mpp->iommu_info);
+
 	/* init current task */
 	mpp->cur_task = mpp_task;
+
+	mpp_task_run_begin(mpp_task, timing_en, MPP_WORK_TIMEOUT_DELAY);
+
 	/* Flush the register before the start the device */
 	wmb();
 	mpp_write(mpp, VDPU1_REG_DEC_INT_EN,
 		  task->reg[reg_en] | VDPU1_DEC_START);
+
+	mpp_task_run_end(mpp_task, timing_en);
 
 	mpp_debug_leave();
 
@@ -503,6 +520,10 @@ static int vdpu_procfs_init(struct mpp_dev *mpp)
 		dec->procfs = NULL;
 		return -EIO;
 	}
+
+	/* for common mpp_dev options */
+	mpp_procfs_create_common(dec->procfs, mpp);
+
 	mpp_procfs_create_u32("aclk", 0644,
 			      dec->procfs, &dec->aclk_info.debug_rate_hz);
 	mpp_procfs_create_u32("session_buffers", 0644,
@@ -547,6 +568,13 @@ static int vdpu_init(struct mpp_dev *mpp)
 	if (!dec->rst_h)
 		mpp_err("No hclk reset resource define\n");
 
+	return 0;
+}
+
+static int vdpu_3036_init(struct mpp_dev *mpp)
+{
+	vdpu_init(mpp);
+	set_bit(mpp->var->device_type, &mpp->queue->dev_active_flags);
 	return 0;
 }
 
@@ -663,25 +691,81 @@ static int vdpu_isr(struct mpp_dev *mpp)
 	return IRQ_HANDLED;
 }
 
+static int vdpu_soft_reset(struct mpp_dev *mpp)
+{
+	u32 val;
+	u32 ret;
+
+	mpp_write(mpp, VDPU1_REG_SOFT_RESET, 1);
+	ret = readl_relaxed_poll_timeout(mpp->reg_base + VDPU1_REG_SOFT_RESET,
+					 val, !val, 0, 5);
+
+	return ret;
+}
+
 static int vdpu_reset(struct mpp_dev *mpp)
 {
 	struct vdpu_dev *dec = to_vdpu_dev(mpp);
+	u32 ret = 0;
 
-	if (dec->rst_a && dec->rst_h) {
+	/* soft reset first */
+	ret = vdpu_soft_reset(mpp);
+	if (ret && dec->rst_a && dec->rst_h) {
+		mpp_err("soft reset failed, use cru reset!\n");
 		mpp_debug(DEBUG_RESET, "reset in\n");
 
 		/* Don't skip this or iommu won't work after reset */
-		rockchip_pmu_idle_request(mpp->dev, true);
+		mpp_pmu_idle_request(mpp, true);
 		mpp_safe_reset(dec->rst_a);
 		mpp_safe_reset(dec->rst_h);
 		udelay(5);
 		mpp_safe_unreset(dec->rst_a);
 		mpp_safe_unreset(dec->rst_h);
-		rockchip_pmu_idle_request(mpp->dev, false);
+		mpp_pmu_idle_request(mpp, false);
 
 		mpp_debug(DEBUG_RESET, "reset out\n");
 	}
 	mpp_write(mpp, VDPU1_REG_DEC_INT_EN, 0);
+
+	return 0;
+}
+
+static int vdpu_3036_set_grf(struct mpp_dev *mpp)
+{
+	int grf_changed;
+	struct mpp_dev *loop = NULL, *n;
+	struct mpp_taskqueue *queue = mpp->queue;
+	bool pd_is_on;
+
+	grf_changed = mpp_grf_is_changed(mpp->grf_info);
+	if (grf_changed) {
+
+		/*
+		 * in this case, devices share the queue also share the same pd&clk,
+		 * so use mpp->dev's pd to control all the process is okay
+		 */
+		pd_is_on = rockchip_pmu_pd_is_on(mpp->dev);
+		if (!pd_is_on)
+			rockchip_pmu_pd_on(mpp->dev);
+		mpp->hw_ops->clk_on(mpp);
+
+		list_for_each_entry_safe(loop, n, &queue->dev_list, queue_link) {
+			if (test_bit(loop->var->device_type, &queue->dev_active_flags)) {
+				if (loop->hw_ops->reset)
+					loop->hw_ops->reset(loop);
+				rockchip_iommu_disable(loop->dev);
+				clear_bit(loop->var->device_type, &queue->dev_active_flags);
+			}
+		}
+
+		mpp_set_grf(mpp->grf_info);
+		rockchip_iommu_enable(mpp->dev);
+		set_bit(mpp->var->device_type, &queue->dev_active_flags);
+
+		mpp->hw_ops->clk_off(mpp);
+		if (!pd_is_on)
+			rockchip_pmu_pd_off(mpp->dev);
+	}
 
 	return 0;
 }
@@ -693,6 +777,17 @@ static struct mpp_hw_ops vdpu_v1_hw_ops = {
 	.set_freq = vdpu_set_freq,
 	.reduce_freq = vdpu_reduce_freq,
 	.reset = vdpu_reset,
+	.set_grf = vdpu_3036_set_grf,
+};
+
+static struct mpp_hw_ops vdpu_3036_hw_ops = {
+	.init = vdpu_3036_init,
+	.clk_on = vdpu_clk_on,
+	.clk_off = vdpu_clk_off,
+	.set_freq = vdpu_set_freq,
+	.reduce_freq = vdpu_reduce_freq,
+	.reset = vdpu_reset,
+	.set_grf = vdpu_3036_set_grf,
 };
 
 static struct mpp_hw_ops vdpu_3288_hw_ops = {
@@ -733,6 +828,14 @@ static const struct mpp_dev_var vdpu_v1_data = {
 	.dev_ops = &vdpu_v1_dev_ops,
 };
 
+static const struct mpp_dev_var vdpu_3036_data = {
+	.device_type = MPP_DEVICE_VDPU1,
+	.hw_info = &vdpu_v1_hw_info,
+	.trans_info = vdpu_v1_trans,
+	.hw_ops = &vdpu_3036_hw_ops,
+	.dev_ops = &vdpu_v1_dev_ops,
+};
+
 static const struct mpp_dev_var vdpu_3288_data = {
 	.device_type = MPP_DEVICE_VDPU1,
 	.hw_info = &vdpu_v1_hw_info,
@@ -768,6 +871,12 @@ static const struct of_device_id mpp_vdpu1_dt_match[] = {
 		.data = &vdpu_3288_data,
 	},
 #endif
+#ifdef CONFIG_CPU_RK3036
+	{
+		.compatible = "rockchip,vpu-decoder-rk3036",
+		.data = &vdpu_3036_data,
+	},
+#endif
 #ifdef CONFIG_CPU_RK3368
 	{
 		.compatible = "rockchip,vpu-decoder-rk3368",
@@ -795,13 +904,15 @@ static int vdpu_probe(struct platform_device *pdev)
 	dec = devm_kzalloc(dev, sizeof(struct vdpu_dev), GFP_KERNEL);
 	if (!dec)
 		return -ENOMEM;
-	platform_set_drvdata(pdev, dec);
-
 	mpp = &dec->mpp;
+	platform_set_drvdata(pdev, mpp);
+
 	if (pdev->dev.of_node) {
 		match = of_match_node(mpp_vdpu1_dt_match, pdev->dev.of_node);
 		if (match)
 			mpp->var = (struct mpp_dev_var *)match->data;
+
+		mpp->core_id = of_alias_get_id(pdev->dev.of_node, "vdpu");
 	}
 
 	ret = mpp_dev_probe(mpp, pdev);
@@ -837,37 +948,19 @@ static int vdpu_probe(struct platform_device *pdev)
 static int vdpu_remove(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
-	struct vdpu_dev *dec = platform_get_drvdata(pdev);
+	struct mpp_dev *mpp = dev_get_drvdata(dev);
 
 	dev_info(dev, "remove device\n");
-	mpp_dev_remove(&dec->mpp);
-	vdpu_procfs_remove(&dec->mpp);
+	mpp_dev_remove(mpp);
+	vdpu_procfs_remove(mpp);
 
 	return 0;
-}
-
-static void vdpu_shutdown(struct platform_device *pdev)
-{
-	int ret;
-	int val;
-	struct device *dev = &pdev->dev;
-	struct vdpu_dev *dec = platform_get_drvdata(pdev);
-	struct mpp_dev *mpp = &dec->mpp;
-
-	dev_info(dev, "shutdown device\n");
-
-	atomic_inc(&mpp->srv->shutdown_request);
-	ret = readx_poll_timeout(atomic_read,
-				 &mpp->task_count,
-				 val, val == 0, 20000, 200000);
-	if (ret == -ETIMEDOUT)
-		dev_err(dev, "wait total running time out\n");
 }
 
 struct platform_driver rockchip_vdpu1_driver = {
 	.probe = vdpu_probe,
 	.remove = vdpu_remove,
-	.shutdown = vdpu_shutdown,
+	.shutdown = mpp_dev_shutdown,
 	.driver = {
 		.name = VDPU1_DRIVER_NAME,
 		.of_match_table = of_match_ptr(mpp_vdpu1_dt_match),

@@ -33,12 +33,16 @@
 
 #define RKVDEC_DRIVER_NAME		"mpp_rkvdec2"
 
+#define RKVDEC_REG_IMPORTANT_BASE	0x2c
+#define RKVDEC_REG_IMPORTANT_INDEX	11
+#define RKVDEC_SOFTREST_EN		BIT(20)
+
 #define	RKVDEC_SESSION_MAX_BUFFERS	40
 /* The maximum registers number of all the version */
-#define RKVDEC_REG_NUM			278
+#define RKVDEC_REG_NUM			279
 #define RKVDEC_REG_HW_ID_INDEX		0
 #define RKVDEC_REG_START_INDEX		0
-#define RKVDEC_REG_END_INDEX		277
+#define RKVDEC_REG_END_INDEX		278
 
 #define REVDEC_GET_PROD_NUM(x)		(((x) >> 16) & 0xffff)
 #define RKVDEC_REG_FORMAT_INDEX		9
@@ -51,6 +55,8 @@
 #define RKVDEC_START_EN			BIT(0)
 
 #define RKVDEC_REG_YSTRIDE_INDEX	20
+#define RKVDEC_REG_CORE_CTRL_INDEX	28
+#define RKVDEC_REG_FILM_IDX_MASK	(0x3ff0000)
 
 #define RKVDEC_REG_RLC_BASE		0x200
 #define RKVDEC_REG_RLC_BASE_INDEX	(128)
@@ -71,6 +77,7 @@
 					RKVDEC_BUF_EMPTY_STA |\
 					RKVDEC_TIMEOUT_STA |\
 					RKVDEC_ERROR_STA)
+#define RKVDEC_PERF_WORKING_CNT		0x41c
 
 /* perf sel reference register */
 #define RKVDEC_PERF_SEL_OFFSET		0x20000
@@ -145,6 +152,8 @@ struct rkvdec2_task {
 
 	/* event for task wait timeout or session timeout */
 	wait_queue_head_t wait;
+	/* link table DMA buffer */
+	struct mpp_dma_buffer *table;
 };
 
 struct rkvdec2_session_priv {
@@ -169,6 +178,8 @@ struct rkvdec2_dev {
 	struct mpp_clk_info core_clk_info;
 	struct mpp_clk_info cabac_clk_info;
 	struct mpp_clk_info hevc_cabac_clk_info;
+	struct mpp_clk_info *cycle_clk;
+
 	u32 default_max_load;
 #ifdef CONFIG_ROCKCHIP_MPP_PROC_FS
 	struct proc_dir_entry *procfs;
@@ -181,18 +192,48 @@ struct rkvdec2_dev {
 	struct reset_control *rst_cabac;
 	struct reset_control *rst_hevc_cabac;
 
+#ifdef CONFIG_PM_DEVFREQ
+	struct regulator *vdd;
+	struct devfreq *devfreq;
+	unsigned long volt;
+	unsigned long core_rate_hz;
+	unsigned long core_last_rate_hz;
+	struct ipa_power_model_data *model_data;
+	struct thermal_cooling_device *devfreq_cooling;
+	struct monitor_dev_info *mdev_info;
+#endif
+
 	/* internal rcb-memory */
 	u32 sram_size;
 	u32 rcb_size;
 	dma_addr_t rcb_iova;
 	struct page *rcb_page;
 	u32 rcb_min_width;
+	u32 rcb_info_count;
+	u32 rcb_infos[RKVDEC_MAX_RCB_NUM * 2];
 
 	/* for link mode */
 	struct rkvdec_link_dev *link_dec;
 	struct mpp_dma_buffer *fix;
+
+	/* for ccu link mode */
+	struct rkvdec2_ccu *ccu;
+	u32 core_mask;
+	u32 task_index;
+	/* mmu info */
+	void __iomem *mmu_base;
+	u32 fault_iova;
+	u32 mmu_fault;
+	u32 mmu0_st;
+	u32 mmu1_st;
+	u32 mmu0_pta;
+	u32 mmu1_pta;
 };
 
+int mpp_set_rcbbuf(struct mpp_dev *mpp, struct mpp_session *session,
+		   struct mpp_task *task);
+int rkvdec2_task_init(struct mpp_dev *mpp, struct mpp_session *session,
+		      struct rkvdec2_task *task, struct mpp_task_msgs *msgs);
 void *rkvdec2_alloc_task(struct mpp_session *session,
 			 struct mpp_task_msgs *msgs);
 int rkvdec2_free_task(struct mpp_session *session, struct mpp_task *mpp_task);
@@ -201,5 +242,8 @@ int rkvdec2_free_session(struct mpp_session *session);
 
 int rkvdec2_result(struct mpp_dev *mpp, struct mpp_task *mpp_task,
 		   struct mpp_task_msgs *msgs);
+int rkvdec2_reset(struct mpp_dev *mpp);
+
+void mpp_devfreq_set_core_rate(struct mpp_dev *mpp, enum MPP_CLOCK_MODE mode);
 
 #endif

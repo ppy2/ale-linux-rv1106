@@ -28,25 +28,23 @@
 
 #define ISP2X_RAWAF_INT_LINE0_EN	BIT(27)
 
+static void isp3_module_done(struct rkisp_isp_stats_vdev *stats_vdev,
+			     u32 reg, u32 value, u32 id)
+{
+	void __iomem *base;
+
+	if (id == ISP_UNITE_LEFT || id == ISP_UNITE_LEFT_B)
+		base = stats_vdev->dev->hw_dev->base_addr;
+	else
+		base = stats_vdev->dev->hw_dev->base_next_addr;
+
+	writel(value, base + reg);
+}
+
 static u32 isp3_stats_read(struct rkisp_isp_stats_vdev *stats_vdev,
 			   u32 addr, u32 id)
 {
-	u32 val;
-
-	if (id == ISP3_LEFT)
-		val = rkisp_read(stats_vdev->dev, addr, true);
-	else
-		val = rkisp_next_read(stats_vdev->dev, addr, true);
-	return val;
-}
-
-static void isp3_stats_write(struct rkisp_isp_stats_vdev *stats_vdev,
-			     u32 addr, u32 value, u32 id)
-{
-	if (id == ISP3_LEFT)
-		rkisp_write(stats_vdev->dev, addr, value, true);
-	else
-		rkisp_next_write(stats_vdev->dev, addr, value, true);
+	return rkisp_idx_read(stats_vdev->dev, addr, id, true);
 }
 
 static int
@@ -132,7 +130,7 @@ rkisp_stats_get_rawawb_meas_reg(struct rkisp_isp_stats_vdev *stats_vdev,
 	}
 
 out:
-	isp3_stats_write(stats_vdev, ISP3X_RAWAWB_CTRL, ctrl, id);
+	isp3_module_done(stats_vdev, ISP3X_RAWAWB_CTRL, ctrl, id);
 	return 0;
 }
 
@@ -168,7 +166,7 @@ rkisp_stats_get_rawaf_meas_reg(struct rkisp_isp_stats_vdev *stats_vdev,
 	}
 
 out:
-	isp3_stats_write(stats_vdev, ISP3X_RAWAF_CTRL, ctrl, id);
+	isp3_module_done(stats_vdev, ISP3X_RAWAF_CTRL, ctrl, id);
 	return 0;
 }
 
@@ -225,7 +223,7 @@ rkisp_stats_get_rawaebig_meas_reg(struct rkisp_isp_stats_vdev *stats_vdev,
 	}
 
 out:
-	isp3_stats_write(stats_vdev, addr + ISP3X_RAWAE_BIG_CTRL, ctrl, id);
+	isp3_module_done(stats_vdev, addr + ISP3X_RAWAE_BIG_CTRL, ctrl, id);
 	return 0;
 }
 
@@ -266,7 +264,7 @@ rkisp_stats_get_rawhstbig_meas_reg(struct rkisp_isp_stats_vdev *stats_vdev,
 					addr + ISP3X_RAWHIST_BIG_RO_BASE_BIN, id);
 
 out:
-	isp3_stats_write(stats_vdev, addr + ISP3X_RAWHIST_BIG_CTRL, ctrl, id);
+	isp3_module_done(stats_vdev, addr + ISP3X_RAWHIST_BIG_CTRL, ctrl, id);
 	return 0;
 }
 
@@ -406,7 +404,7 @@ rkisp_stats_get_rawaelite_meas_reg(struct rkisp_isp_stats_vdev *stats_vdev,
 	}
 
 out:
-	isp3_stats_write(stats_vdev, ISP3X_RAWAE_LITE_CTRL, ctrl, id);
+	isp3_module_done(stats_vdev, ISP3X_RAWAE_LITE_CTRL, ctrl, id);
 	return 0;
 }
 
@@ -435,7 +433,7 @@ rkisp_stats_get_rawhstlite_meas_reg(struct rkisp_isp_stats_vdev *stats_vdev,
 					ISP3X_RAWHIST_LITE_RO_BASE_BIN, id);
 
 out:
-	isp3_stats_write(stats_vdev, ISP3X_RAWHIST_LITE_CTRL, ctrl, id);
+	isp3_module_done(stats_vdev, ISP3X_RAWHIST_LITE_CTRL, ctrl, id);
 	return 0;
 }
 
@@ -618,7 +616,7 @@ rkisp_stats_get_rawawb_meas_ddr(struct rkisp_isp_stats_vdev *stats_vdev,
 	}
 
 out:
-	isp3_stats_write(stats_vdev, ISP3X_RAWAWB_CTRL, ctrl, id);
+	isp3_module_done(stats_vdev, ISP3X_RAWAWB_CTRL, ctrl, id);
 	return 0;
 }
 
@@ -649,6 +647,7 @@ rkisp_stats_get_rawaf_meas_ddr(struct rkisp_isp_stats_vdev *stats_vdev,
 	af->afm_sum_b = isp3_stats_read(stats_vdev, ISP3X_RAWAF_SUM_B, id);
 	af->afm_lum_b = isp3_stats_read(stats_vdev, ISP3X_RAWAF_LUM_B, id);
 	af->int_state = isp3_stats_read(stats_vdev, ISP3X_RAWAF_INT_STATE, id);
+	af->highlit_cnt_winb = isp3_stats_read(stats_vdev, ISP3X_RAWAF_HIGHLIT_CNT_WINB, id);
 
 	for (i = 0; i < ISP3X_RAWAF_SUMDATA_NUM; i++) {
 		af->ramdata[i].v1 = ddr_addr[i * 4];
@@ -658,7 +657,7 @@ rkisp_stats_get_rawaf_meas_ddr(struct rkisp_isp_stats_vdev *stats_vdev,
 	}
 
 out:
-	isp3_stats_write(stats_vdev, ISP3X_RAWAF_CTRL, ctrl, id);
+	isp3_module_done(stats_vdev, ISP3X_RAWAF_CTRL, ctrl, id);
 	return 0;
 }
 
@@ -719,7 +718,7 @@ rkisp_stats_get_rawaebig_meas_ddr(struct rkisp_isp_stats_vdev *stats_vdev,
 	}
 
 out:
-	isp3_stats_write(stats_vdev, addr + ISP3X_RAWAE_BIG_CTRL, ctrl, id);
+	isp3_module_done(stats_vdev, addr + ISP3X_RAWAE_BIG_CTRL, ctrl, id);
 	return 0;
 }
 
@@ -764,7 +763,7 @@ rkisp_stats_get_rawhstbig_meas_ddr(struct rkisp_isp_stats_vdev *stats_vdev,
 		hst->hist_bin[i] = ddr_addr[i];
 
 out:
-	isp3_stats_write(stats_vdev, addr + ISP3X_RAWHIST_BIG_CTRL, ctrl, id);
+	isp3_module_done(stats_vdev, addr + ISP3X_RAWHIST_BIG_CTRL, ctrl, id);
 	return 0;
 }
 
@@ -906,7 +905,7 @@ rkisp_stats_get_rawaelite_meas_ddr(struct rkisp_isp_stats_vdev *stats_vdev,
 	}
 
 out:
-	isp3_stats_write(stats_vdev, ISP3X_RAWAE_LITE_CTRL, ctrl, id);
+	isp3_module_done(stats_vdev, ISP3X_RAWAE_LITE_CTRL, ctrl, id);
 	return 0;
 }
 
@@ -937,7 +936,7 @@ rkisp_stats_get_rawhstlite_meas_ddr(struct rkisp_isp_stats_vdev *stats_vdev,
 		hst->hist_bin[i] = ddr_addr[i];
 
 out:
-	isp3_stats_write(stats_vdev, ISP3X_RAWHIST_LITE_CTRL, ctrl, id);
+	isp3_module_done(stats_vdev, ISP3X_RAWHIST_LITE_CTRL, ctrl, id);
 	return 0;
 }
 
@@ -957,75 +956,6 @@ static struct rkisp_stats_ops_v3x __maybe_unused stats_ddr_ops_v3x = {
 };
 
 static void
-rkisp_merge_dual_dhaz_params(struct rkisp_isp_stats_vdev *stats_vdev,
-			     struct rkisp3x_isp_stat_buffer *left_stat,
-			     struct rkisp3x_isp_stat_buffer *right_stat)
-{
-	struct rkisp_device *dev = stats_vdev->dev;
-	struct isp3x_dhaz_cfg *dhaz_cfg;
-	struct isp3x_dhaz_stat *l_dhaz;
-	struct isp3x_dhaz_stat *r_dhaz;
-	u32 i, val, hist_out0, hist_out1, hist_out2, pic_sumh;
-	u32 num = isp3_stats_read(stats_vdev, ISP3X_DHAZ_IIR0, 0) & 0x1f;
-
-	if (!left_stat || !right_stat ||
-	    !(left_stat->meas_type & ISP3X_STAT_DHAZ) ||
-	    !(right_stat->meas_type & ISP3X_STAT_DHAZ) ||
-	    !(isp3_stats_read(stats_vdev, ISP3X_DHAZ_CTRL, 0) & BIT(25)))
-		return;
-
-	dhaz_cfg = &dev->params_vdev.isp3x_params->others.dhaz_cfg;
-	l_dhaz = &left_stat->params.dhaz;
-	r_dhaz = &right_stat->params.dhaz;
-
-	if (!num || (!l_dhaz->dhaz_pic_sumh && !r_dhaz->dhaz_pic_sumh)) {
-		v4l2_err(stats_vdev->vnode.vdev.v4l2_dev,
-			 "%s 0 params, num:%d sumh:%d %d\n", __func__,
-			 num, l_dhaz->dhaz_pic_sumh, r_dhaz->dhaz_pic_sumh);
-		return;
-	}
-
-	val = ISP_PACK_2SHORT((l_dhaz->dhaz_adp_wt + r_dhaz->dhaz_adp_wt) / 2,
-			      (l_dhaz->dhaz_adp_air_base + r_dhaz->dhaz_adp_air_base) / 2);
-	isp3_stats_write(stats_vdev, ISP3X_DHAZ_ADT_WR0, val, 0);
-	isp3_stats_write(stats_vdev, ISP3X_DHAZ_ADT_WR0, val, 1);
-
-	val = ISP_PACK_2SHORT((l_dhaz->dhaz_adp_tmax + r_dhaz->dhaz_adp_tmax) / 2,
-			      (l_dhaz->dhaz_adp_gratio + r_dhaz->dhaz_adp_gratio) / 2);
-	isp3_stats_write(stats_vdev, ISP3X_DHAZ_ADT_WR1, val, 0);
-	isp3_stats_write(stats_vdev, ISP3X_DHAZ_ADT_WR1, val, 1);
-
-	num =  min_t(u32, num, left_stat->frame_id + 1);
-	pic_sumh = l_dhaz->dhaz_pic_sumh + r_dhaz->dhaz_pic_sumh;
-	for (i = 0; i < ISP3X_DHAZ_HIST_WR_NUM / 3; i++) {
-		hist_out0 = (l_dhaz->h_rgb_iir[i * 3] * l_dhaz->dhaz_pic_sumh +
-			     r_dhaz->h_rgb_iir[i * 3] * r_dhaz->dhaz_pic_sumh) / pic_sumh;
-		hist_out0 = (dhaz_cfg->hist_wr[i * 3] * (num - 1) + hist_out0) / num;
-		dhaz_cfg->hist_wr[i * 3] = hist_out0;
-
-		hist_out1 = (l_dhaz->h_rgb_iir[i * 3 + 1] * l_dhaz->dhaz_pic_sumh +
-			     r_dhaz->h_rgb_iir[i * 3 + 1] * r_dhaz->dhaz_pic_sumh) / pic_sumh;
-		hist_out1 = (dhaz_cfg->hist_wr[i * 3 + 1] * (num - 1) + hist_out1) / num;
-		dhaz_cfg->hist_wr[i * 3 + 1] = hist_out1;
-
-		hist_out2 = (l_dhaz->h_rgb_iir[i * 3 + 2] * l_dhaz->dhaz_pic_sumh +
-			     r_dhaz->h_rgb_iir[i * 3 + 2] * r_dhaz->dhaz_pic_sumh) / pic_sumh;
-		hist_out2 = (dhaz_cfg->hist_wr[i * 3 + 2] * (num - 1) + hist_out2) / num;
-		dhaz_cfg->hist_wr[i * 3 + 2] = hist_out2;
-
-		val = hist_out0 | hist_out1 << 10 | hist_out2 << 20;
-		isp3_stats_write(stats_vdev, ISP3X_DHAZ_HIST_WR0 + i * 4, val, 0);
-		isp3_stats_write(stats_vdev, ISP3X_DHAZ_HIST_WR0 + i * 4, val, 1);
-	}
-	val = (l_dhaz->h_rgb_iir[i * 3] * l_dhaz->dhaz_pic_sumh +
-	       r_dhaz->h_rgb_iir[i * 3] * r_dhaz->dhaz_pic_sumh) / pic_sumh;
-	val = (dhaz_cfg->hist_wr[i * 3] * (num - 1) + val) / num;
-	dhaz_cfg->hist_wr[i * 3] = val;
-	isp3_stats_write(stats_vdev, ISP3X_DHAZ_HIST_WR0 + i * 4, val, 0);
-	isp3_stats_write(stats_vdev, ISP3X_DHAZ_HIST_WR0 + i * 4, val, 1);
-}
-
-static void
 rkisp_stats_send_meas_v3x(struct rkisp_isp_stats_vdev *stats_vdev,
 			  struct rkisp_isp_readout_work *meas_work)
 {
@@ -1034,6 +964,7 @@ rkisp_stats_send_meas_v3x(struct rkisp_isp_stats_vdev *stats_vdev,
 	struct rkisp3x_isp_stat_buffer *cur_stat_buf = NULL;
 	struct rkisp_stats_ops_v3x *ops =
 		(struct rkisp_stats_ops_v3x *)stats_vdev->priv_ops;
+	struct rkisp_isp_params_vdev *params_vdev = &stats_vdev->dev->params_vdev;
 	int ret = 0;
 	u32 size = sizeof(struct rkisp3x_isp_stat_buffer);
 
@@ -1053,6 +984,7 @@ rkisp_stats_send_meas_v3x(struct rkisp_isp_stats_vdev *stats_vdev,
 		cur_stat_buf =
 			(struct rkisp3x_isp_stat_buffer *)(cur_buf->vaddr[0]);
 		cur_stat_buf->frame_id = cur_frame_id;
+		cur_stat_buf->params_id = params_vdev->cur_frame_id;
 	}
 
 	if (meas_work->isp_ris & ISP3X_AFM_SUM_OF)
@@ -1067,11 +999,9 @@ rkisp_stats_send_meas_v3x(struct rkisp_isp_stats_vdev *stats_vdev,
 		v4l2_warn(stats_vdev->vnode.vdev.v4l2_dev,
 			  "ISP3X_3A_RAWAF_SUM\n");
 
+	ops->get_rawaf_meas(stats_vdev, cur_stat_buf, 0);
 	if (meas_work->isp3a_ris & ISP3X_3A_RAWAWB)
 		ret |= ops->get_rawawb_meas(stats_vdev, cur_stat_buf, 0);
-
-	if (meas_work->isp3a_ris & ISP3X_3A_RAWAF)
-		ret |= ops->get_rawaf_meas(stats_vdev, cur_stat_buf, 0);
 
 	if (meas_work->isp3a_ris & ISP3X_3A_RAWAE_BIG)
 		ret |= ops->get_rawae3_meas(stats_vdev, cur_stat_buf, 0);
@@ -1102,18 +1032,15 @@ rkisp_stats_send_meas_v3x(struct rkisp_isp_stats_vdev *stats_vdev,
 		ret |= ops->get_dhaz_stats(stats_vdev, cur_stat_buf, 0);
 	}
 
-	if (stats_vdev->dev->hw_dev->is_unite) {
-		struct rkisp3x_isp_stat_buffer *left_stat = cur_stat_buf;
-
+	if (stats_vdev->dev->hw_dev->unite) {
 		size *= 2;
 		if (cur_buf) {
 			cur_stat_buf++;
 			cur_stat_buf->frame_id = cur_frame_id;
 		}
+		ops->get_rawaf_meas(stats_vdev, cur_stat_buf, 1);
 		if (meas_work->isp3a_ris & ISP3X_3A_RAWAWB)
 			ret |= ops->get_rawawb_meas(stats_vdev, cur_stat_buf, 1);
-		if (meas_work->isp3a_ris & ISP3X_3A_RAWAF)
-			ret |= ops->get_rawaf_meas(stats_vdev, cur_stat_buf, 1);
 		if (meas_work->isp3a_ris & ISP3X_3A_RAWAE_BIG)
 			ret |= ops->get_rawae3_meas(stats_vdev, cur_stat_buf, 1);
 		if (meas_work->isp3a_ris & ISP3X_3A_RAWHIST_BIG)
@@ -1134,7 +1061,6 @@ rkisp_stats_send_meas_v3x(struct rkisp_isp_stats_vdev *stats_vdev,
 			ret |= ops->get_bls_stats(stats_vdev, cur_stat_buf, 1);
 			ret |= ops->get_dhaz_stats(stats_vdev, cur_stat_buf, 1);
 		}
-		rkisp_merge_dual_dhaz_params(stats_vdev, left_stat, cur_stat_buf);
 	}
 
 	if (cur_buf && !ret) {
@@ -1154,13 +1080,13 @@ rkisp_stats_isr_v3x(struct rkisp_isp_stats_vdev *stats_vdev,
 {
 	struct rkisp_device *dev = stats_vdev->dev;
 	struct rkisp_hw_dev *hw = dev->hw_dev;
-	void __iomem *base = !hw->is_unite ?
+	void __iomem *base = hw->unite != ISP_UNITE_TWO ?
 		hw->base_addr : hw->base_next_addr;
 	struct rkisp_isp_readout_work work;
 	u32 iq_isr_mask = ISP3X_SIAWB_DONE | ISP3X_SIAF_FIN |
 		ISP3X_EXP_END | ISP3X_SIHST_RDY | ISP3X_AFM_SUM_OF | ISP3X_AFM_LUM_OF;
 	u32 cur_frame_id, isp_mis_tmp = 0, iq_3a_mask = 0;
-	u32 wr_buf_idx, temp_isp_ris, temp_isp3a_ris;
+	u32 i, wr_buf_idx, temp_isp_ris, temp_isp3a_ris;
 
 	rkisp_dmarx_get_frame(stats_vdev->dev, &cur_frame_id, NULL, NULL, true);
 
@@ -1204,12 +1130,10 @@ rkisp_stats_isr_v3x(struct rkisp_isp_stats_vdev *stats_vdev,
 		stats_vdev->wr_buf_idx = wr_buf_idx;
 		rkisp_finish_buffer(dev, &stats_vdev->stats_buf[wr_buf_idx]);
 
-		rkisp_write(dev, ISP3X_MI_3A_WR_BASE,
-			    stats_vdev->stats_buf[wr_buf_idx].dma_addr, false);
-		if (dev->hw_dev->is_unite)
-			rkisp_next_write(dev, ISP3X_MI_3A_WR_BASE,
-					 stats_vdev->stats_buf[wr_buf_idx].dma_addr +
-					 ISP3X_RD_STATS_BUF_SIZE, false);
+		for (i = 0; i < dev->unite_div; i++)
+			rkisp_idx_write(dev, ISP3X_MI_3A_WR_BASE,
+					stats_vdev->stats_buf[wr_buf_idx].dma_addr +
+					i * ISP3X_RD_STATS_BUF_SIZE, i, false);
 	}
 
 	if (isp_ris & ISP3X_FRAME) {
@@ -1217,7 +1141,7 @@ rkisp_stats_isr_v3x(struct rkisp_isp_stats_vdev *stats_vdev,
 		work.frame_id = cur_frame_id;
 		work.isp_ris = temp_isp_ris | isp_ris;
 		work.isp3a_ris = temp_isp3a_ris | iq_3a_mask;
-		work.timestamp = ktime_get_ns();
+		work.timestamp = rkisp_time_get_ns(dev);
 
 		rkisp_stats_send_meas_v3x(stats_vdev, &work);
 	}
@@ -1237,16 +1161,27 @@ rkisp_stats_rdbk_enable_v3x(struct rkisp_isp_stats_vdev *stats_vdev, bool en)
 	stats_vdev->rdbk_mode = en;
 }
 
+static void
+rkisp_get_stat_size_v3x(struct rkisp_isp_stats_vdev *stats_vdev,
+			unsigned int sizes[])
+{
+	int mult = stats_vdev->dev->unite_div;
+
+	sizes[0] = sizeof(struct rkisp3x_isp_stat_buffer) * mult;
+	stats_vdev->vdev_fmt.fmt.meta.buffersize = sizes[0];
+}
+
 static struct rkisp_isp_stats_ops rkisp_isp_stats_ops_tbl = {
 	.isr_hdl = rkisp_stats_isr_v3x,
 	.send_meas = rkisp_stats_send_meas_v3x,
 	.rdbk_enable = rkisp_stats_rdbk_enable_v3x,
+	.get_stat_size = rkisp_get_stat_size_v3x,
 };
 
 void rkisp_stats_first_ddr_config_v3x(struct rkisp_isp_stats_vdev *stats_vdev)
 {
 	struct rkisp_device *dev = stats_vdev->dev;
-	int i, mult = dev->hw_dev->is_unite ? 2 : 1;
+	int i, mult = dev->unite_div;
 
 	if (dev->isp_sdev.in_fmt.fmt_type == FMT_YUV)
 		return;
@@ -1254,32 +1189,26 @@ void rkisp_stats_first_ddr_config_v3x(struct rkisp_isp_stats_vdev *stats_vdev)
 	stats_vdev->rd_stats_from_ddr = false;
 	stats_vdev->priv_ops = &stats_reg_ops_v3x;
 
-	if (!IS_HDR_RDBK(stats_vdev->dev->hdr.op_mode)) {
-		for (i = 0; i < RKISP_STATS_DDR_BUF_NUM; i++) {
-			stats_vdev->stats_buf[i].is_need_vaddr = true;
-			stats_vdev->stats_buf[i].size = ISP3X_RD_STATS_BUF_SIZE * mult;
-			if (rkisp_alloc_buffer(dev, &stats_vdev->stats_buf[i]))
-				goto err;
-		}
-
-		stats_vdev->priv_ops = &stats_ddr_ops_v3x;
-		stats_vdev->rd_stats_from_ddr = true;
-		stats_vdev->rd_buf_idx = 0;
-		stats_vdev->wr_buf_idx = 0;
-
-		rkisp_unite_write(dev, ISP3X_MI_DBR_WR_SIZE,
-				  ISP3X_RD_STATS_BUF_SIZE,
-				  false, dev->hw_dev->is_unite);
-		rkisp_unite_set_bits(dev, ISP3X_SWS_CFG, 0,
-				     ISP3X_3A_DDR_WRITE_EN, false,
-				     dev->hw_dev->is_unite);
-		rkisp_write(dev, ISP3X_MI_3A_WR_BASE,
-			    stats_vdev->stats_buf[0].dma_addr, false);
-		if (dev->hw_dev->is_unite)
-			rkisp_next_write(dev, ISP3X_MI_3A_WR_BASE,
-					 stats_vdev->stats_buf[0].dma_addr +
-					 ISP3X_RD_STATS_BUF_SIZE, false);
+	for (i = 0; i < RKISP_STATS_DDR_BUF_NUM; i++) {
+		stats_vdev->stats_buf[i].is_need_vaddr = true;
+		stats_vdev->stats_buf[i].size = ISP3X_RD_STATS_BUF_SIZE * mult;
+		if (rkisp_alloc_buffer(dev, &stats_vdev->stats_buf[i]))
+			goto err;
 	}
+
+	stats_vdev->priv_ops = &stats_ddr_ops_v3x;
+	stats_vdev->rd_stats_from_ddr = true;
+	stats_vdev->rd_buf_idx = 0;
+	stats_vdev->wr_buf_idx = 0;
+
+	rkisp_unite_write(dev, ISP3X_MI_DBR_WR_SIZE,
+			  ISP3X_RD_STATS_BUF_SIZE, false);
+	rkisp_unite_set_bits(dev, ISP3X_SWS_CFG, 0,
+			     ISP3X_3A_DDR_WRITE_EN, false);
+	for (i = 0; i < dev->unite_div; i++)
+		rkisp_idx_write(dev, ISP3X_MI_3A_WR_BASE,
+				stats_vdev->stats_buf[0].dma_addr +
+				i * ISP3X_RD_STATS_BUF_SIZE, i, false);
 
 	return;
 err:
@@ -1290,13 +1219,6 @@ err:
 
 void rkisp_init_stats_vdev_v3x(struct rkisp_isp_stats_vdev *stats_vdev)
 {
-	int mult = stats_vdev->dev->hw_dev->is_unite ? 2 : 1;
-
-	stats_vdev->vdev_fmt.fmt.meta.dataformat =
-		V4L2_META_FMT_RK_ISP1_STAT_3A;
-	stats_vdev->vdev_fmt.fmt.meta.buffersize =
-		mult * sizeof(struct rkisp3x_isp_stat_buffer);
-
 	stats_vdev->ops = &rkisp_isp_stats_ops_tbl;
 	stats_vdev->priv_ops = &stats_reg_ops_v3x;
 	stats_vdev->rd_stats_from_ddr = false;

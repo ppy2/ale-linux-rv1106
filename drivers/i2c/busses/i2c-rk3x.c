@@ -6,6 +6,7 @@
  * based on the patches by Rockchip Inc.
  */
 
+#include <linux/acpi.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/i2c.h>
@@ -17,6 +18,7 @@
 #include <linux/io.h>
 #include <linux/of_address.h>
 #include <linux/of_irq.h>
+#include <linux/reset.h>
 #include <linux/spinlock.h>
 #include <linux/clk.h>
 #include <linux/wait.h>
@@ -25,6 +27,7 @@
 #include <linux/math64.h>
 #include <linux/reboot.h>
 #include <linux/delay.h>
+#include <linux/soc/rockchip/rockchip_thunderboot_service.h>
 
 
 /* Register Map */
@@ -37,6 +40,7 @@
 #define REG_IEN        0x18 /* interrupt enable */
 #define REG_IPD        0x1c /* interrupt pending */
 #define REG_FCNT       0x20 /* finished count */
+#define REG_SCL_OE_DB  0x24 /* Slave hold scl debounce */
 #define REG_CON1       0x228 /* control register1 */
 
 /* Data buffer offsets */
@@ -85,6 +89,7 @@ enum {
 #define REG_INT_START     BIT(4) /* START condition generated */
 #define REG_INT_STOP      BIT(5) /* STOP condition generated */
 #define REG_INT_NAKRCV    BIT(6) /* NACK received */
+#define REG_INT_SLV_HDSCL BIT(7) /* slave hold scl */
 #define REG_INT_ALL       0xff
 
 /* Disable i2c all irqs */
@@ -95,7 +100,7 @@ enum {
 #define REG_CON1_NACK_AUTO_STOP BIT(2)
 
 /* Constants */
-#define WAIT_TIMEOUT      1000 /* ms */
+#define WAIT_TIMEOUT      200 /* ms */
 #define DEFAULT_SCL_RATE  (100 * 1000) /* Hz */
 
 /**
@@ -209,6 +214,7 @@ struct rk3x_i2c_soc_data {
  * @error: error code for i2c transfer
  * @i2c_restart_nb: make sure the i2c transfer to be finished
  * @system_restarting: true if system is restarting
+ * @tb_cl: client for rockchip thunder boot service
  */
 struct rk3x_i2c {
 	struct i2c_adapter adap;
@@ -221,6 +227,9 @@ struct rk3x_i2c {
 	struct clk *pclk;
 	struct notifier_block clk_rate_nb;
 	bool autostop_supported;
+
+	struct reset_control *reset;
+	struct reset_control *reset_apb;
 
 	/* Settings */
 	struct i2c_timings t;
@@ -244,6 +253,8 @@ struct rk3x_i2c {
 
 	struct notifier_block i2c_restart_nb;
 	bool system_restarting;
+	struct rk_tb_client tb_cl;
+	int irq;
 };
 
 static void rk3x_i2c_prepare_read(struct rk3x_i2c *i2c);
@@ -300,6 +311,13 @@ static bool rk3x_i2c_auto_stop(struct rk3x_i2c *i2c)
 	len = i2c->msg->len - i2c->processed;
 
 	if (len > 32)
+		goto out;
+
+	/* For tx mode, one byte of the device address also needs to be counted,
+	 * if the data length is equal to 32, which is actually 33 bytes, it would
+	 * need to be divided into two parts, and needs to jump out of autostop.
+	 */
+	if (i2c->msg->len == 32 && i2c->mode == REG_CON_MOD_TX && !i2c->processed)
 		goto out;
 
 	i2c->state = STATE_STOP;
@@ -476,7 +494,7 @@ static void rk3x_i2c_handle_write(struct rk3x_i2c *i2c, unsigned int ipd)
 {
 	if (!(ipd & REG_INT_MBTF)) {
 		rk3x_i2c_stop(i2c, -EIO);
-		dev_err(i2c->dev, "unexpected irq in WRITE: 0x%x\n", ipd);
+		dev_warn_ratelimited(i2c->dev, "unexpected irq in WRITE: 0x%x\n", ipd);
 		rk3x_i2c_clean_ipd(i2c);
 		return;
 	}
@@ -519,8 +537,8 @@ static void rk3x_i2c_handle_read(struct rk3x_i2c *i2c, unsigned int ipd)
 	if (!(ipd & REG_INT_MBRF))
 		return;
 
-	/* ack interrupt */
-	i2c_writel(i2c, REG_INT_MBRF, REG_IPD);
+	/* ack interrupt (read also produces a spurious START flag, clear it too) */
+	i2c_writel(i2c, REG_INT_MBRF | REG_INT_START, REG_IPD);
 
 	/* read the data from receive buffer */
 	rk3x_i2c_read(i2c);
@@ -539,7 +557,7 @@ static void rk3x_i2c_handle_stop(struct rk3x_i2c *i2c, unsigned int ipd)
 
 	if (!(ipd & REG_INT_STOP)) {
 		rk3x_i2c_stop(i2c, -EIO);
-		dev_err(i2c->dev, "unexpected irq in STOP: 0x%x\n", ipd);
+		dev_warn_ratelimited(i2c->dev, "unexpected irq in STOP: 0x%x\n", ipd);
 		rk3x_i2c_clean_ipd(i2c);
 		return;
 	}
@@ -978,9 +996,10 @@ static void rk3x_i2c_adapt_div(struct rk3x_i2c *i2c, unsigned long clk_rate)
 {
 	struct i2c_timings *t = &i2c->t;
 	struct rk3x_i2c_calced_timings calc;
+	unsigned long period, time_hold = (WAIT_TIMEOUT / 2) * 1000000;
 	u64 t_low_ns, t_high_ns;
 	unsigned long flags;
-	u32 val;
+	u32 val, cnt;
 	int ret;
 
 	ret = i2c->soc_data->calc_timings(clk_rate, t, &calc);
@@ -995,6 +1014,10 @@ static void rk3x_i2c_adapt_div(struct rk3x_i2c *i2c, unsigned long clk_rate)
 	i2c_writel(i2c, val, REG_CON);
 	i2c_writel(i2c, (calc.div_high << 16) | (calc.div_low & 0xffff),
 		   REG_CLKDIV);
+
+	period = DIV_ROUND_UP(1000000000, clk_rate);
+	cnt = DIV_ROUND_UP(time_hold, period);
+	i2c_writel(i2c, cnt, REG_SCL_OE_DB);
 	spin_unlock_irqrestore(&i2c->lock, flags);
 
 	clk_disable(i2c->pclk);
@@ -1147,9 +1170,9 @@ static int rk3x_i2c_setup(struct rk3x_i2c *i2c, struct i2c_msg *msgs, int num)
 	return ret;
 }
 
-static int rk3x_i2c_wait_xfer_poll(struct rk3x_i2c *i2c)
+static int rk3x_i2c_wait_xfer_poll(struct rk3x_i2c *i2c, unsigned long xfer_time)
 {
-	ktime_t timeout = ktime_add_ms(ktime_get(), WAIT_TIMEOUT);
+	ktime_t timeout = ktime_add_ms(ktime_get(), xfer_time);
 
 	while (READ_ONCE(i2c->busy) &&
 	       ktime_compare(ktime_get(), timeout) < 0) {
@@ -1160,12 +1183,30 @@ static int rk3x_i2c_wait_xfer_poll(struct rk3x_i2c *i2c)
 	return !i2c->busy;
 }
 
+/*
+ * Reset i2c controller, reset all i2c registers.
+ */
+static void rk3x_i2c_reset_controller(struct rk3x_i2c *i2c)
+{
+	if (!IS_ERR_OR_NULL(i2c->reset)) {
+		reset_control_assert(i2c->reset);
+		udelay(10);
+		reset_control_deassert(i2c->reset);
+	}
+
+	if (!IS_ERR_OR_NULL(i2c->reset_apb)) {
+		reset_control_assert(i2c->reset_apb);
+		udelay(10);
+		reset_control_deassert(i2c->reset_apb);
+	}
+}
+
 static int rk3x_i2c_xfer_common(struct i2c_adapter *adap,
 				struct i2c_msg *msgs, int num, bool polling)
 {
 	struct rk3x_i2c *i2c = (struct rk3x_i2c *)adap->algo_data;
 	unsigned long timeout, flags;
-	u32 val;
+	u32 val, ipd = 0;
 	int ret = 0;
 	int i;
 
@@ -1184,12 +1225,26 @@ static int rk3x_i2c_xfer_common(struct i2c_adapter *adap,
 	 * rk3x_i2c_setup()).
 	 */
 	for (i = 0; i < num; i += ret) {
-		ret = rk3x_i2c_setup(i2c, msgs + i, num - i);
+		unsigned long xfer_time = WAIT_TIMEOUT;
+		int len;
 
+		ret = rk3x_i2c_setup(i2c, msgs + i, num - i);
 		if (ret < 0) {
 			dev_err(i2c->dev, "rk3x_i2c_setup() failed\n");
 			break;
 		}
+
+		/*
+		 * Transfer time in mSec = Total bits / transfer rate + interval time
+		 * Total bits = 9 bits per byte (including ACK bit) + Start & stop bits
+		 */
+		if (ret == 2)
+			len = msgs[i + 1].len;
+		else
+			len = msgs[i].len;
+		xfer_time += len / 64;
+		xfer_time += DIV_ROUND_CLOSEST(((len * 9) + 2) * MSEC_PER_SEC,
+					       i2c->t.bus_freq_hz);
 
 		if (i + ret >= num)
 			i2c->is_last_msg = true;
@@ -1200,16 +1255,17 @@ static int rk3x_i2c_xfer_common(struct i2c_adapter *adap,
 
 		if (!polling) {
 			timeout = wait_event_timeout(i2c->wait, !i2c->busy,
-						     msecs_to_jiffies(WAIT_TIMEOUT));
+						     msecs_to_jiffies(xfer_time));
 		} else {
-			timeout = rk3x_i2c_wait_xfer_poll(i2c);
+			timeout = rk3x_i2c_wait_xfer_poll(i2c, xfer_time);
 		}
 
 		spin_lock_irqsave(&i2c->lock, flags);
 
 		if (timeout == 0) {
+			ipd = i2c_readl(i2c, REG_IPD);
 			dev_err(i2c->dev, "timeout, ipd: 0x%02x, state: %d\n",
-				i2c_readl(i2c, REG_IPD), i2c->state);
+				ipd, i2c->state);
 
 			/* Force a STOP condition without interrupt */
 			rk3x_i2c_disable_irq(i2c);
@@ -1236,6 +1292,12 @@ static int rk3x_i2c_xfer_common(struct i2c_adapter *adap,
 	clk_disable(i2c->clk);
 
 	spin_unlock_irqrestore(&i2c->lock, flags);
+
+	if ((ret == -ETIMEDOUT) && (ipd & REG_INT_SLV_HDSCL)) {
+		rk3x_i2c_reset_controller(i2c);
+		dev_err(i2c->dev, "SCL hold by slave, check your device.\n");
+		rk3x_i2c_adapt_div(i2c, clk_get_rate(i2c->clk));
+	}
 
 	return ret < 0 ? ret : num;
 }
@@ -1297,6 +1359,45 @@ static unsigned int rk3x_i2c_get_version(struct rk3x_i2c *i2c)
 
 	return version;
 }
+
+static int rk3x_i2c_of_get_bus_id(struct device *dev, struct rk3x_i2c *priv)
+{
+	int bus_id = -1;
+
+	if (IS_ENABLED(CONFIG_OF) && dev->of_node)
+		bus_id = of_alias_get_id(dev->of_node, "i2c");
+
+	return bus_id;
+}
+
+#ifdef CONFIG_ACPI
+static int rk3x_i2c_acpi_get_bus_id(struct device *dev, struct rk3x_i2c *priv)
+{
+	struct acpi_device *adev;
+	unsigned long bus_id = -1;
+	const char *uid;
+	int ret;
+
+	adev = ACPI_COMPANION(dev);
+	if (!adev)
+		return -ENXIO;
+
+	uid = acpi_device_uid(adev);
+	if (!uid || !(*uid)) {
+		dev_err(dev, "Cannot retrieve UID\n");
+		return -ENODEV;
+	}
+
+	ret = kstrtoul(uid, 0, &bus_id);
+
+	return !ret ? bus_id : -ERANGE;
+}
+#else
+static int rk3x_i2c_acpi_get_bus_id(struct device *dev, struct rk3x_i2c *priv)
+{
+	return -ENOENT;
+}
+#endif /* CONFIG_ACPI */
 
 static __maybe_unused int rk3x_i2c_suspend_noirq(struct device *dev)
 {
@@ -1409,10 +1510,37 @@ static const struct of_device_id rk3x_i2c_match[] = {
 };
 MODULE_DEVICE_TABLE(of, rk3x_i2c_match);
 
+static void rk3x_i2c_tb_cb(void *data)
+{
+	unsigned long clk_rate;
+	int ret;
+	struct rk3x_i2c *i2c = (struct rk3x_i2c *)data;
+
+	if (i2c->clk) {
+		i2c->clk_rate_nb.notifier_call = rk3x_i2c_clk_notifier_cb;
+		ret = clk_notifier_register(i2c->clk, &i2c->clk_rate_nb);
+		if (ret != 0) {
+			dev_err(i2c->dev, "Unable to register clock notifier\n");
+			clk_unprepare(i2c->pclk);
+			clk_unprepare(i2c->clk);
+			return;
+		}
+	}
+
+	clk_rate = clk_get_rate(i2c->clk);
+	if (!clk_rate)
+		device_property_read_u32(i2c->dev, "i2c,clk-rate", (u32 *)&clk_rate);
+
+	rk3x_i2c_adapt_div(i2c, clk_rate);
+	if (rk3x_i2c_get_version(i2c) >= RK_I2C_VERSION5)
+		i2c->autostop_supported = true;
+	enable_irq(i2c->irq);
+}
+
 static int rk3x_i2c_probe(struct platform_device *pdev)
 {
+	struct fwnode_handle *fw = dev_fwnode(&pdev->dev);
 	struct device_node *np = pdev->dev.of_node;
-	const struct of_device_id *match;
 	struct rk3x_i2c *i2c;
 	int ret = 0;
 	u32 value;
@@ -1423,8 +1551,16 @@ static int rk3x_i2c_probe(struct platform_device *pdev)
 	if (!i2c)
 		return -ENOMEM;
 
-	match = of_match_node(rk3x_i2c_match, np);
-	i2c->soc_data = match->data;
+	i2c->soc_data = (struct rk3x_i2c_soc_data *)device_get_match_data(&pdev->dev);
+
+	ret = rk3x_i2c_acpi_get_bus_id(&pdev->dev, i2c);
+	if (ret < 0) {
+		ret = rk3x_i2c_of_get_bus_id(&pdev->dev, i2c);
+		if (ret < 0)
+			return ret;
+	}
+
+	i2c->adap.nr = ret;
 
 	/* use common interface to get I2C timing properties */
 	i2c_parse_fw_timings(&pdev->dev, &i2c->t, true);
@@ -1433,9 +1569,10 @@ static int rk3x_i2c_probe(struct platform_device *pdev)
 	i2c->adap.owner = THIS_MODULE;
 	i2c->adap.algo = &rk3x_i2c_algorithm;
 	i2c->adap.retries = 3;
-	i2c->adap.dev.of_node = np;
+	i2c->adap.dev.of_node = pdev->dev.of_node;
 	i2c->adap.algo_data = i2c;
 	i2c->adap.dev.parent = &pdev->dev;
+	i2c->adap.dev.fwnode = fw;
 
 	i2c->dev = &pdev->dev;
 
@@ -1463,14 +1600,7 @@ static int rk3x_i2c_probe(struct platform_device *pdev)
 
 		grf = syscon_regmap_lookup_by_phandle(np, "rockchip,grf");
 		if (!IS_ERR(grf)) {
-			int bus_nr;
-
-			/* Try to set the I2C adapter number from dt */
-			bus_nr = of_alias_get_id(np, "i2c");
-			if (bus_nr < 0) {
-				dev_err(&pdev->dev, "rk3x-i2c needs i2cX alias");
-				return -EINVAL;
-			}
+			int bus_nr = i2c->adap.nr;
 
 			if (i2c->soc_data == &rv1108_soc_data && bus_nr == 2)
 				/* rv1108 i2c2 set grf offset-0x408, bit-10 */
@@ -1497,6 +1627,14 @@ static int rk3x_i2c_probe(struct platform_device *pdev)
 	irq = platform_get_irq(pdev, 0);
 	if (irq < 0)
 		return irq;
+	i2c->irq = irq;
+
+	if (IS_ENABLED(CONFIG_ROCKCHIP_THUNDER_BOOT_SERVICE) &&
+	    device_property_read_bool(&pdev->dev, "rockchip,amp-shared")) {
+		i2c->tb_cl.data = i2c;
+		i2c->tb_cl.cb = rk3x_i2c_tb_cb;
+		irq_set_status_flags(irq, IRQ_NOAUTOEN);
+	}
 
 	ret = devm_request_irq(&pdev->dev, irq, rk3x_i2c_irq,
 			       0, dev_name(&pdev->dev), i2c);
@@ -1507,22 +1645,26 @@ static int rk3x_i2c_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, i2c);
 
-	if (i2c->soc_data->calc_timings == rk3x_i2c_v0_calc_timings) {
-		/* Only one clock to use for bus clock and peripheral clock */
-		i2c->clk = devm_clk_get(&pdev->dev, NULL);
-		i2c->pclk = i2c->clk;
-	} else {
-		i2c->clk = devm_clk_get(&pdev->dev, "i2c");
-		i2c->pclk = devm_clk_get(&pdev->dev, "pclk");
+	i2c->reset = devm_reset_control_get(&pdev->dev, "i2c");
+	if (!has_acpi_companion(&pdev->dev)) {
+		if (i2c->soc_data->calc_timings == rk3x_i2c_v0_calc_timings) {
+			/* Only one clock to use for bus clock and peripheral clock */
+			i2c->clk = devm_clk_get(&pdev->dev, NULL);
+			i2c->pclk = i2c->clk;
+		} else {
+			i2c->clk = devm_clk_get(&pdev->dev, "i2c");
+			i2c->pclk = devm_clk_get(&pdev->dev, "pclk");
+			i2c->reset_apb = devm_reset_control_get(&pdev->dev, "apb");
+		}
+
+		if (IS_ERR(i2c->clk))
+			return dev_err_probe(&pdev->dev, PTR_ERR(i2c->clk),
+					     "Can't get bus clk\n");
+
+		if (IS_ERR(i2c->pclk))
+			return dev_err_probe(&pdev->dev, PTR_ERR(i2c->pclk),
+					     "Can't get periph clk\n");
 	}
-
-	if (IS_ERR(i2c->clk))
-		return dev_err_probe(&pdev->dev, PTR_ERR(i2c->clk),
-				     "Can't get bus clk\n");
-
-	if (IS_ERR(i2c->pclk))
-		return dev_err_probe(&pdev->dev, PTR_ERR(i2c->pclk),
-				     "Can't get periph clk\n");
 
 	ret = clk_prepare(i2c->clk);
 	if (ret < 0) {
@@ -1535,20 +1677,29 @@ static int rk3x_i2c_probe(struct platform_device *pdev)
 		goto err_clk;
 	}
 
-	i2c->clk_rate_nb.notifier_call = rk3x_i2c_clk_notifier_cb;
-	ret = clk_notifier_register(i2c->clk, &i2c->clk_rate_nb);
-	if (ret != 0) {
-		dev_err(&pdev->dev, "Unable to register clock notifier\n");
-		goto err_pclk;
+	if (IS_ENABLED(CONFIG_ROCKCHIP_THUNDER_BOOT_SERVICE) && i2c->tb_cl.cb) {
+		rk_tb_client_register_cb(&i2c->tb_cl);
+	} else {
+		if (i2c->clk) {
+			i2c->clk_rate_nb.notifier_call = rk3x_i2c_clk_notifier_cb;
+			ret = clk_notifier_register(i2c->clk, &i2c->clk_rate_nb);
+			if (ret != 0) {
+				dev_err(&pdev->dev, "Unable to register clock notifier\n");
+				goto err_pclk;
+			}
+		}
+
+		clk_rate = clk_get_rate(i2c->clk);
+		if (!clk_rate)
+			device_property_read_u32(&pdev->dev, "i2c,clk-rate", (u32 *)&clk_rate);
+
+		rk3x_i2c_adapt_div(i2c, clk_rate);
+
+		if (rk3x_i2c_get_version(i2c) >= RK_I2C_VERSION5)
+			i2c->autostop_supported = true;
 	}
 
-	clk_rate = clk_get_rate(i2c->clk);
-	rk3x_i2c_adapt_div(i2c, clk_rate);
-
-	if (rk3x_i2c_get_version(i2c) >= RK_I2C_VERSION5)
-		i2c->autostop_supported = true;
-
-	ret = i2c_add_adapter(&i2c->adap);
+	ret = i2c_add_numbered_adapter(&i2c->adap);
 	if (ret < 0)
 		goto err_clk_notifier;
 
@@ -1597,7 +1748,11 @@ static int __init rk3x_i2c_driver_init(void)
 {
 	return platform_driver_register(&rk3x_i2c_driver);
 }
+#ifdef CONFIG_INITCALL_ASYNC
 subsys_initcall_sync(rk3x_i2c_driver_init);
+#else
+subsys_initcall(rk3x_i2c_driver_init);
+#endif
 
 static void __exit rk3x_i2c_driver_exit(void)
 {

@@ -37,7 +37,7 @@
 #include <linux/uaccess.h>
 #include <linux/syscalls.h>
 
-#define MAX_SPI_DEV_NUM 8
+#define MAX_SPI_DEV_NUM 10
 #define SPI_MAX_SPEED_HZ	12000000
 
 struct spi_test_data {
@@ -333,9 +333,6 @@ static int rockchip_spi_test_probe(struct spi_device *spi)
 	if (!spi)
 		return -ENOMEM;
 
-	if (!spi->dev.of_node)
-		return -ENOMEM;
-
 	spi_test_data = (struct spi_test_data *)kzalloc(sizeof(struct spi_test_data), GFP_KERNEL);
 	if (!spi_test_data) {
 		dev_err(&spi->dev, "ERR: no memory for spi_test_data\n");
@@ -352,7 +349,7 @@ static int rockchip_spi_test_probe(struct spi_device *spi)
 		return -1;
 	}
 
-	if (of_property_read_u32(spi->dev.of_node, "id", &id)) {
+	if (device_property_read_u32(&spi->dev, "id", &id)) {
 		dev_warn(&spi->dev, "fail to get id, default set 0\n");
 		id = 0;
 	}

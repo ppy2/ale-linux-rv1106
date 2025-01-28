@@ -76,7 +76,6 @@ struct rockchip_dp_device {
 	struct drm_device        *drm_dev;
 	struct device            *dev;
 	struct drm_encoder       encoder;
-	struct drm_bridge	 *bridge;
 	struct drm_display_mode  mode;
 
 	struct regmap            *grf;
@@ -90,6 +89,9 @@ struct rockchip_dp_device {
 	struct analogix_dp_device *adp;
 	struct analogix_dp_plat_data plat_data;
 	struct rockchip_drm_sub_dev sub_dev;
+
+	unsigned int min_refresh_rate;
+	unsigned int max_refresh_rate;
 };
 
 static int rockchip_grf_write(struct regmap *grf, unsigned int reg,
@@ -230,18 +232,49 @@ static int rockchip_dp_get_modes(struct analogix_dp_plat_data *plat_data,
 	return 0;
 }
 
-static void rockchip_dp_loader_protect(struct drm_encoder *encoder, bool on)
+static int rockchip_dp_loader_protect(struct drm_encoder *encoder, bool on)
 {
 	struct rockchip_dp_device *dp = to_dp(encoder);
 	struct analogix_dp_plat_data *plat_data = &dp->plat_data;
+	struct rockchip_dp_device *secondary = NULL;
+	int ret;
+
+	if (plat_data->right) {
+		secondary = rockchip_dp_find_by_id(dp->dev->driver, !dp->id);
+
+		ret = rockchip_dp_loader_protect(&secondary->encoder, on);
+		if (ret)
+			return ret;
+	}
 
 	if (!on)
-		return;
+		return 0;
 
 	if (plat_data->panel)
 		panel_simple_loader_protect(plat_data->panel);
 
-	analogix_dp_loader_protect(dp->adp);
+	ret = analogix_dp_loader_protect(dp->adp);
+	if (ret) {
+		if (secondary)
+			analogix_dp_disable(secondary->adp);
+		return ret;
+	}
+
+	return 0;
+}
+
+static bool rockchip_dp_skip_connector(struct drm_bridge *bridge)
+{
+	if (!bridge)
+		return false;
+
+	if (of_device_is_compatible(bridge->of_node, "dp-connector"))
+		return false;
+
+	if (bridge->ops & DRM_BRIDGE_OP_MODES)
+		return false;
+
+	return true;
 }
 
 static int rockchip_dp_bridge_attach(struct analogix_dp_plat_data *plat_data,
@@ -250,14 +283,15 @@ static int rockchip_dp_bridge_attach(struct analogix_dp_plat_data *plat_data,
 {
 	struct rockchip_dp_device *dp = to_dp(plat_data);
 	struct rockchip_drm_sub_dev *sdev = &dp->sub_dev;
-	int ret;
 
-	if (dp->bridge) {
-		ret = drm_bridge_attach(&dp->encoder, dp->bridge, bridge, 0);
-		if (ret) {
-			DRM_ERROR("Failed to attach bridge to drm: %d\n", ret);
-			return ret;
-		}
+	if (!connector) {
+		struct list_head *connector_list =
+			&bridge->dev->mode_config.connector_list;
+
+		list_for_each_entry(connector, connector_list, head)
+			if (drm_connector_has_possible_encoder(connector,
+							       bridge->encoder))
+				break;
 	}
 
 	if (connector) {
@@ -373,6 +407,7 @@ rockchip_dp_drm_encoder_atomic_check(struct drm_encoder *encoder,
 	struct rockchip_dp_device *dp = to_dp(encoder);
 	struct rockchip_crtc_state *s = to_rockchip_crtc_state(crtc_state);
 	struct drm_display_info *di = &conn_state->connector->display_info;
+	int refresh_rate;
 
 	if (di->num_bus_formats)
 		s->bus_format = di->bus_formats[0];
@@ -401,6 +436,33 @@ rockchip_dp_drm_encoder_atomic_check(struct drm_encoder *encoder,
 	s->tv_state = &conn_state->tv;
 	s->eotf = HDMI_EOTF_TRADITIONAL_GAMMA_SDR;
 	s->color_space = V4L2_COLORSPACE_DEFAULT;
+	/**
+	 * It's priority to user rate range define in dtsi.
+	 */
+	if (dp->max_refresh_rate && dp->min_refresh_rate) {
+		s->max_refresh_rate = dp->max_refresh_rate;
+		s->min_refresh_rate = dp->min_refresh_rate;
+	} else {
+		s->max_refresh_rate = di->monitor_range.max_vfreq;
+		s->min_refresh_rate = di->monitor_range.min_vfreq;
+	}
+
+	/**
+	 * Timing exposed in DisplayID or legacy EDID is usually optimized
+	 * for bandwidth by using minimum horizontal and vertical blank. If
+	 * timing beyond the Adaptive-Sync range, it should not enable the
+	 * Ignore MSA option in this timing. If the refresh rate of the
+	 * timing is with the Adaptive-Sync range, this timing should support
+	 * the Adaptive-Sync from the timing's refresh rate to minimum
+	 * support range.
+	 */
+	refresh_rate = drm_mode_vrefresh(&crtc_state->adjusted_mode);
+	if (refresh_rate > s->max_refresh_rate || refresh_rate < s->min_refresh_rate) {
+		s->max_refresh_rate = 0;
+		s->min_refresh_rate = 0;
+	} else if (refresh_rate < s->max_refresh_rate) {
+		s->max_refresh_rate = refresh_rate;
+	}
 
 	return 0;
 }
@@ -580,8 +642,8 @@ static int rockchip_dp_probe(struct platform_device *pdev)
 	dp->plat_data.detach = rockchip_dp_bridge_detach;
 	dp->plat_data.convert_to_split_mode = drm_mode_convert_to_split_mode;
 	dp->plat_data.convert_to_origin_mode = drm_mode_convert_to_origin_mode;
-	dp->plat_data.skip_connector = !!bridge;
-	dp->bridge = bridge;
+	dp->plat_data.skip_connector = rockchip_dp_skip_connector(bridge);
+	dp->plat_data.bridge = bridge;
 
 	ret = rockchip_dp_of_probe(dp);
 	if (ret < 0)
@@ -596,8 +658,10 @@ static int rockchip_dp_probe(struct platform_device *pdev)
 	if (dp->data->split_mode && device_property_read_bool(dev, "split-mode")) {
 		struct rockchip_dp_device *secondary =
 				rockchip_dp_find_by_id(dev->driver, !dp->id);
-		if (!secondary)
-			return -EPROBE_DEFER;
+		if (!secondary) {
+			ret = -EPROBE_DEFER;
+			goto err_dp_remove;
+		}
 
 		dp->plat_data.right = secondary->adp;
 		dp->plat_data.split_mode = true;
@@ -605,7 +669,18 @@ static int rockchip_dp_probe(struct platform_device *pdev)
 		secondary->plat_data.split_mode = true;
 	}
 
-	return component_add(dev, &rockchip_dp_component_ops);
+	device_property_read_u32(dev, "min-refresh-rate", &dp->min_refresh_rate);
+	device_property_read_u32(dev, "max-refresh-rate", &dp->max_refresh_rate);
+
+	ret = component_add(dev, &rockchip_dp_component_ops);
+	if (ret)
+		goto err_dp_remove;
+
+	return 0;
+
+err_dp_remove:
+	analogix_dp_remove(dp->adp);
+	return ret;
 }
 
 static int rockchip_dp_remove(struct platform_device *pdev)
@@ -616,6 +691,26 @@ static int rockchip_dp_remove(struct platform_device *pdev)
 	analogix_dp_remove(dp->adp);
 
 	return 0;
+}
+
+static __maybe_unused int rockchip_dp_suspend(struct device *dev)
+{
+	struct rockchip_dp_device *dp = dev_get_drvdata(dev);
+
+	if (IS_ERR(dp->adp))
+		return 0;
+
+	return analogix_dp_suspend(dp->adp);
+}
+
+static __maybe_unused int rockchip_dp_resume(struct device *dev)
+{
+	struct rockchip_dp_device *dp = dev_get_drvdata(dev);
+
+	if (IS_ERR(dp->adp))
+		return 0;
+
+	return analogix_dp_resume(dp->adp);
 }
 
 static __maybe_unused int rockchip_dp_runtime_suspend(struct device *dev)
@@ -639,6 +734,7 @@ static __maybe_unused int rockchip_dp_runtime_resume(struct device *dev)
 }
 
 static const struct dev_pm_ops rockchip_dp_pm_ops = {
+	SET_NOIRQ_SYSTEM_SLEEP_PM_OPS(rockchip_dp_suspend, rockchip_dp_resume)
 	SET_RUNTIME_PM_OPS(rockchip_dp_runtime_suspend,
 			   rockchip_dp_runtime_resume, NULL)
 };

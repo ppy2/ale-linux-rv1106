@@ -55,8 +55,16 @@
 #define CIF_ISP_INPUT_H_MAX_V30		3504
 #define CIF_ISP_INPUT_W_MAX_V30_UNITE	8192
 #define CIF_ISP_INPUT_H_MAX_V30_UNITE	6144
-#define CIF_ISP_INPUT_W_MIN		208
-#define CIF_ISP_INPUT_H_MIN		128
+#define CIF_ISP_INPUT_W_MAX_V32		3072
+#define CIF_ISP_INPUT_H_MAX_V32		1728
+#define CIF_ISP_INPUT_W_MAX_V32_UNITE	3840
+#define CIF_ISP_INPUT_H_MAX_V32_UNITE	2160
+#define CIF_ISP_INPUT_W_MAX_V32_L	4224
+#define CIF_ISP_INPUT_H_MAX_V32_L	3136
+#define CIF_ISP_INPUT_W_MAX_V32_L_UNITE	8192
+#define CIF_ISP_INPUT_H_MAX_V32_L_UNITE	6144
+#define CIF_ISP_INPUT_W_MIN		272
+#define CIF_ISP_INPUT_H_MIN		256
 #define CIF_ISP_OUTPUT_W_MAX		CIF_ISP_INPUT_W_MAX
 #define CIF_ISP_OUTPUT_H_MAX		CIF_ISP_INPUT_H_MAX
 #define CIF_ISP_OUTPUT_W_MIN		CIF_ISP_INPUT_W_MIN
@@ -147,6 +155,8 @@ void rkisp_chk_tb_over(struct rkisp_device *isp_dev);
 static inline void rkisp_chk_tb_over(struct rkisp_device *isp_dev) {}
 #endif
 
+void rkisp_save_tb_info(struct rkisp_device *isp_dev);
+
 void rkisp_mipi_isr(unsigned int mipi_mis, struct rkisp_device *dev);
 
 void rkisp_mipi_v13_isr(unsigned int err1, unsigned int err2,
@@ -175,6 +185,9 @@ void rkisp_trigger_read_back(struct rkisp_device *dev, u8 dma2frm, u32 mode, boo
 int rkisp_rdbk_trigger_event(struct rkisp_device *dev, u32 cmd, void *arg);
 
 void rkisp_rx_buf_pool_free(struct rkisp_device *dev);
+
+int rkisp_expander_config(struct rkisp_device *dev,
+			  struct rkmodule_hdr_cfg *cfg, bool on);
 
 static inline
 struct ispsd_out_fmt *rkisp_get_ispsd_out_fmt(struct rkisp_isp_subdev *isp_sdev)

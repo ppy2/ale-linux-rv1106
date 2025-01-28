@@ -7,26 +7,13 @@
 #include <dt-bindings/gpio/gpio.h>
 #include <dt-bindings/pinctrl/rockchip.h>
 
-&pinctrl {
-	pmic {
-		soc_slppin_gpio: soc_slppin_gpio {
-			rockchip,pins = <0 RK_PA2
-				RK_FUNC_GPIO &pcfg_output_low>;
-		};
-		soc_slppin_shutdown: soc_slppin_shutdown {
-			rockchip,pins = <0 RK_PA2
-				RK_FUNC_GPIO &pcfg_output_high>;
-		};
-	};
-};
-
 &spi2 {
 	status = "okay";
 	assigned-clocks = <&cru CLK_SPI2>;
 	assigned-clock-rates = <200000000>;
 	num-cs = <2>;
 
-	rk806master@0 {
+	rk806master: rk806master@0 {
 		compatible = "rockchip,rk806";
 		spi-max-frequency = <1000000>;
 		reg = <0x0>;
@@ -34,11 +21,9 @@
 		interrupt-parent = <&gpio0>;
 		interrupts = <7 IRQ_TYPE_LEVEL_LOW>;
 
-		pinctrl-names = "default", "pmic-sleep", "pmic-power-off", "pmic-reset";
-		pinctrl-0 = <&soc_slppin_gpio>, <&rk806_dvs1_null>, <&rk806_dvs2_null>, <&rk806_dvs3_null>;
-		pinctrl-1 = <&soc_slppin_gpio>, <&rk806_dvs1_slp>, <&rk806_dvs2_null>, <&rk806_dvs3_null>;
-		pinctrl-2 = <&rk806_dvs1_pwrdn>, <&rk806_dvs2_null>, <&rk806_dvs3_null>;
-		pinctrl-3 = <&rk806_dvs1_rst>, <&rk806_dvs2_null>, <&rk806_dvs3_null>;
+		pinctrl-names = "default", "pmic-power-off";
+		pinctrl-0 = <&pmic_pins>, <&rk806_dvs1_null>, <&rk806_dvs2_null>, <&rk806_dvs3_null>;
+		pinctrl-1 = <&rk806_dvs1_pwrdn>;
 
 		/* 2800mv-3500mv */
 		low_voltage_threshold = <3000>;
@@ -69,9 +54,13 @@
 		vcc10-supply = <&vcc5v0_sys>;
 		vcc11-supply = <&vcc_2v0_pldo_s3>;
 		vcc12-supply = <&vcc5v0_sys>;
-		vcc13-supply = <&vcc5v0_sys>;
+		vcc13-supply = <&vcc_1v1_nldo_s3>;
 		vcc14-supply = <&vcc_1v1_nldo_s3>;
 		vcca-supply = <&vcc5v0_sys>;
+
+		pwrkey {
+			status = "okay";
+		};
 
 		pinctrl_rk806: pinctrl_rk806 {
 			gpio-controller;
@@ -160,12 +149,12 @@
 
 		regulators {
 			vdd_gpu_s0: DCDC_REG1 {
-				regulator-always-on;
 				regulator-boot-on;
 				regulator-min-microvolt = <550000>;
 				regulator-max-microvolt = <950000>;
 				regulator-ramp-delay = <12500>;
 				regulator-name = "vdd_gpu_s0";
+				regulator-enable-ramp-delay = <400>;
 				regulator-state-mem {
 					regulator-off-in-suspend;
 				};
@@ -186,12 +175,12 @@
 			vdd_log_s0: DCDC_REG3 {
 				regulator-always-on;
 				regulator-boot-on;
-				regulator-min-microvolt = <750000>;
+				regulator-min-microvolt = <675000>;
 				regulator-max-microvolt = <750000>;
 				regulator-ramp-delay = <12500>;
 				regulator-name = "vdd_log_s0";
 				regulator-state-mem {
-					regulator-on-in-suspend;
+					regulator-off-in-suspend;
 					regulator-suspend-microvolt = <750000>;
 				};
 			};
@@ -209,11 +198,11 @@
 			};
 
 			vdd_gpu_mem_s0: DCDC_REG5 {
-				regulator-always-on;
 				regulator-boot-on;
 				regulator-min-microvolt = <675000>;
 				regulator-max-microvolt = <950000>;
 				regulator-ramp-delay = <12500>;
+				regulator-enable-ramp-delay = <400>;
 				regulator-name = "vdd_gpu_mem_s0";
 				regulator-state-mem {
 					regulator-off-in-suspend;
@@ -324,7 +313,7 @@
 				regulator-ramp-delay = <12500>;
 				regulator-name = "vcc_3v3_s3";
 				regulator-state-mem {
-					regulator-off-in-suspend;
+					regulator-on-in-suspend;
 					regulator-suspend-microvolt = <3300000>;
 				};
 			};
@@ -382,8 +371,8 @@
 			vdd_0v75_hdmi_edp_s0: NLDO_REG3 {
 				regulator-always-on;
 				regulator-boot-on;
-				regulator-min-microvolt = <750000>;
-				regulator-max-microvolt = <750000>;
+				regulator-min-microvolt = <837500>;
+				regulator-max-microvolt = <837500>;
 				regulator-name = "vdd_0v75_hdmi_edp_s0";
 				regulator-state-mem {
 					regulator-off-in-suspend;
@@ -414,7 +403,7 @@
 		};
 	};
 
-	rk806slave@1 {
+	rk806slave: rk806slave@1 {
 		compatible = "rockchip,rk806";
 		spi-max-frequency = <1000000>;
 		reg = <0x01>;
@@ -422,9 +411,8 @@
 		interrupt-parent = <&gpio0>;
 		interrupts = <7 IRQ_TYPE_LEVEL_LOW>;
 
-		pinctrl-names = "default", "pmic-sleep";
+		pinctrl-names = "default";
 		pinctrl-0 = <&rk806_slave_dvs1_null>, <&rk806_slave_dvs2_null>, <&rk806_slave_dvs3_null>;
-		pinctrl-1 = <&rk806_slave_dvs1_slp>, <&rk806_slave_dvs2_null>, <&rk806_slave_dvs3_null>;
 
 		/* 0: restart PMU;
 		 * 1: reset all the power off reset registers,
@@ -545,7 +533,7 @@
 				regulator-always-on;
 				regulator-boot-on;
 				regulator-min-microvolt = <550000>;
-				regulator-max-microvolt = <950000>;
+				regulator-max-microvolt = <1050000>;
 				regulator-ramp-delay = <12500>;
 				regulator-name = "vdd_cpu_big1_s0";
 				regulator-state-mem {
@@ -557,7 +545,7 @@
 				regulator-always-on;
 				regulator-boot-on;
 				regulator-min-microvolt = <550000>;
-				regulator-max-microvolt = <950000>;
+				regulator-max-microvolt = <1050000>;
 				regulator-ramp-delay = <12500>;
 				regulator-name = "vdd_cpu_big0_s0";
 				regulator-state-mem {
@@ -593,7 +581,7 @@
 				regulator-always-on;
 				regulator-boot-on;
 				regulator-min-microvolt = <675000>;
-				regulator-max-microvolt = <950000>;
+				regulator-max-microvolt = <1050000>;
 				regulator-ramp-delay = <12500>;
 				regulator-name = "vdd_cpu_big1_mem_s0";
 				regulator-state-mem {
@@ -606,7 +594,7 @@
 				regulator-always-on;
 				regulator-boot-on;
 				regulator-min-microvolt = <675000>;
-				regulator-max-microvolt = <950000>;
+				regulator-max-microvolt = <1050000>;
 				regulator-ramp-delay = <12500>;
 				regulator-name = "vdd_cpu_big0_mem_s0";
 				regulator-state-mem {
@@ -650,8 +638,8 @@
 			vdd_ddr_s0: DCDC_REG10 {
 				regulator-always-on;
 				regulator-boot-on;
-				regulator-min-microvolt = <850000>;
-				regulator-max-microvolt = <850000>;
+				regulator-min-microvolt = <675000>;
+				regulator-max-microvolt = <900000>;
 				regulator-ramp-delay = <12500>;
 				regulator-name = "vdd_ddr_s0";
 				regulator-state-mem {

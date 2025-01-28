@@ -50,7 +50,7 @@ struct snd_soc_dai_driver dummy_dai = {
 		.stream_name = "Dummy Playback",
 		.channels_min = 2,
 		.channels_max = 384,
-		.rates = SNDRV_PCM_RATE_8000_192000,
+		.rates = SNDRV_PCM_RATE_8000_384000,
 		.formats = (SNDRV_PCM_FMTBIT_S16_LE |
 			    SNDRV_PCM_FMTBIT_S20_3LE |
 			    SNDRV_PCM_FMTBIT_S24_LE |
@@ -60,7 +60,7 @@ struct snd_soc_dai_driver dummy_dai = {
 		.stream_name = "Dummy Capture",
 		.channels_min = 2,
 		.channels_max = 384,
-		.rates = SNDRV_PCM_RATE_8000_192000,
+		.rates = SNDRV_PCM_RATE_8000_384000,
 		.formats = (SNDRV_PCM_FMTBIT_S16_LE |
 			    SNDRV_PCM_FMTBIT_S20_3LE |
 			    SNDRV_PCM_FMTBIT_S24_LE |

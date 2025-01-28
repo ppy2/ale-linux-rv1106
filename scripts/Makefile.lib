@@ -243,7 +243,9 @@ objtool_args =								\
 	$(if $(or $(CONFIG_GCOV_KERNEL),$(CONFIG_LTO_CLANG)), 		\
 		--no-unreachable,)					\
 	$(if $(CONFIG_RETPOLINE), --retpoline,)				\
+	$(if $(CONFIG_RETHUNK), --rethunk,)				\
 	$(if $(CONFIG_X86_SMAP), --uaccess,)				\
+	$(if $(CONFIG_SLS), --sls,)					\
 	$(if $(CONFIG_FTRACE_MCOUNT_USE_OBJTOOL), --mcount,)
 
 # Useful for describing the dependency of composite objects
@@ -320,6 +322,14 @@ DTC_FLAGS += $(call dtc-option,-Wno-interrupt_provider)
 # Generation of symbols for Android
 ifeq ($(CONFIG_DTC_SYMBOLS),y)
 DTC_FLAGS += -@
+endif
+
+ifeq ($(CONFIG_DTC_OMIT_DISABLED),y)
+DTC_FLAGS += -Wnode_disabled
+endif
+
+ifeq ($(CONFIG_DTC_OMIT_EMPTY),y)
+DTC_FLAGS += -Wnode_empty
 endif
 
 # Disable noisy checks by default
@@ -422,8 +432,13 @@ quiet_cmd_lzo = LZO     $@
 
 quiet_cmd_lz4 = LZ4     $@
       cmd_lz4 = { cat $(real-prereqs) | \
-                  $(LZ4) -12 --favor-decSpeed stdin stdout; \
+                  $(LZ4) -l -12 --favor-decSpeed stdin stdout; \
                   $(size_append); } > $@
+
+quiet_cmd_lz4c = LZ4C    $@
+      cmd_lz4c = { cat $(real-prereqs) | \
+                   $(LZ4) -12 --favor-decSpeed stdin stdout; \
+                   $(size_append); } > $@
 
 # U-Boot mkimage
 # ---------------------------------------------------------------------------

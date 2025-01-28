@@ -141,6 +141,14 @@ enum cif_reg_index {
 	CIF_REG_MIPI_EFFECT_CODE_ID1,
 	CIF_REG_MIPI_EFFECT_CODE_ID2,
 	CIF_REG_MIPI_EFFECT_CODE_ID3,
+	CIF_REG_LVDS_ID0_CTRL0,
+	CIF_REG_LVDS_ID1_CTRL0,
+	CIF_REG_LVDS_ID2_CTRL0,
+	CIF_REG_LVDS_ID3_CTRL0,
+	CIF_REG_MIPI_FRAME_SIZE_ID0,
+	CIF_REG_MIPI_FRAME_SIZE_ID1,
+	CIF_REG_MIPI_FRAME_SIZE_ID2,
+	CIF_REG_MIPI_FRAME_SIZE_ID3,
 	CIF_REG_MIPI_ON_PAD,
 
 	CIF_REG_Y_STAT_CONTROL,
@@ -158,6 +166,7 @@ enum cif_reg_index {
 	/* reg belowed is in grf */
 	CIF_REG_GRF_CIFIO_CON,
 	CIF_REG_GRF_CIFIO_CON1,
+	CIF_REG_GRF_CIFIO_VENC,
 	/* reg global control */
 	CIF_REG_GLB_CTRL,
 	CIF_REG_GLB_INTEN,
@@ -416,6 +425,33 @@ enum cif_reg_index {
 #define CSI_MIPI0_EFFECT_CODE_ID3	0x1B8
 #define CSI_MIPI0_ON_PAD		0x1BC
 
+#define CSI_MIPI0_FRAME_SIZE_ID0	0x1C0
+#define CSI_MIPI0_FRAME_SIZE_ID1	0x1C4
+#define CSI_MIPI0_FRAME_SIZE_ID2	0x1C8
+#define CSI_MIPI0_FRAME_SIZE_ID3	0x1CC
+
+/* RV1106 CONTROL Registers Offset */
+#define CIF_LVDS0_ID0_CTRL0		0x1D0
+#define CIF_LVDS0_ID1_CTRL0		0x1D4
+#define CIF_LVDS0_ID2_CTRL0		0x1D8
+#define CIF_LVDS0_ID3_CTRL0		0x1DC
+#define CIF_LVDS_SAV_EAV_ACT0_ID0_RV1106	0x1E0
+#define CIF_LVDS_SAV_EAV_BLK0_ID0_RV1106	0x1E4
+#define CIF_LVDS_SAV_EAV_ACT1_ID0_RV1106	0x1E8
+#define CIF_LVDS_SAV_EAV_BLK1_ID0_RV1106	0x1EC
+#define CIF_LVDS_SAV_EAV_ACT0_ID1_RV1106	0x1F0
+#define CIF_LVDS_SAV_EAV_BLK0_ID1_RV1106	0x1F4
+#define CIF_LVDS_SAV_EAV_ACT1_ID1_RV1106	0x1F8
+#define CIF_LVDS_SAV_EAV_BLK1_ID1_RV1106	0x1FC
+#define CIF_LVDS_SAV_EAV_ACT0_ID2_RV1106	0x200
+#define CIF_LVDS_SAV_EAV_BLK0_ID2_RV1106	0x204
+#define CIF_LVDS_SAV_EAV_ACT1_ID2_RV1106	0x208
+#define CIF_LVDS_SAV_EAV_BLK1_ID2_RV1106	0x20C
+#define CIF_LVDS_SAV_EAV_ACT0_ID3_RV1106	0x210
+#define CIF_LVDS_SAV_EAV_BLK0_ID3_RV1106	0x214
+#define CIF_LVDS_SAV_EAV_ACT1_ID3_RV1106	0x218
+#define CIF_LVDS_SAV_EAV_BLK1_ID3_RV1106	0x21C
+
 /* RK3588 CONTROL Registers Offset */
 #define GLB_CTRL			0X000
 #define GLB_INTEN			0X004
@@ -489,6 +525,10 @@ enum cif_reg_index {
 #define PRE_INF_FRAME_END_CLR		(0x01 << 8)
 #define PST_INF_FRAME_END_CLR		(0x01 << 9)
 #define INTSTAT_ERR			(0xFC)
+#define INTSTAT_ERR_RK3588		(DVP_SIZE_ERR |\
+					 DVP_FIFO_OVERFLOW |\
+					 DVP_BANDWIDTH_LACK)
+
 #define DVP_ALL_OVERFLOW		(IFIFO_OVERFLOW | DFIFO_OVERFLOW)
 
 #define DVP_FIFO_OVERFLOW		(0x01 << 16)
@@ -506,6 +546,9 @@ enum cif_reg_index {
 
 #define DVP_SW_PRESS_VALUE(val)		(((val) & 0x7) << 13)
 #define DVP_SW_HURRY_VALUE(val)		(((val) & 0x7) << 9)
+#define DVP_SW_CAP_EN(ID)		(2 << ID)
+#define DVP_SW_DMA_EN(ID)		(0x100000 << ID)
+#define DVP_START_INTSTAT(ID)		(0x3 << ((ID) * 2))
 
 #define DVP_DMA_END_INTEN(id)	\
 	({ \
@@ -604,7 +647,8 @@ enum cif_reg_index {
 #define BT656_1120_MULTI_ID_3_MASK	~(0x03 << 28)
 #define	CIF_HIGH_ALIGN			(0x01 << 18)
 #define	CIF_HIGH_ALIGN_RK3588		(0x01 << 21)
-
+#define BT656_DETECT_SAV		(0X01 << 13)
+#define BT656_DETECT_SAV_EAV		(0X00 << 13)
 
 #define BT1120_CLOCK_SINGLE_EDGES_RK3588	(0x00 << 11)
 #define BT1120_CLOCK_DOUBLE_EDGES_RK3588	(0x01 << 11)
@@ -718,6 +762,12 @@ enum cif_reg_index {
 #define SW_SCALE_END(intstat, ch)	((intstat >> ((ch + 1) * 2)) & 0x3)
 #define SCALE_SOFT_RESET(ch)		(0x1 << (ch + 16))
 
+/* CIF TOISP*/
+#define CIF_TOISP0_FS(ch)		(BIT(14) << ch)
+#define CIF_TOISP1_FS(ch)		(BIT(17) << ch)
+#define CIF_TOISP0_FE(ch)		(BIT(20) << ch)
+#define CIF_TOISP1_FE(ch)		(BIT(23) << ch)
+
 /* CIF_CSI_ID_CTRL0 */
 #define CSI_DISABLE_CAPTURE		(0x0 << 0)
 #define CSI_ENABLE_CAPTURE		(0x1 << 0)
@@ -728,6 +778,7 @@ enum cif_reg_index {
 #define CSI_WRDDR_TYPE_YUV422		(0x4 << 1)
 #define CSI_WRDDR_TYPE_YUV420SP		(0x5 << 1)
 #define CSI_WRDDR_TYPE_YUV400		(0x6 << 1)
+#define CSI_WRDDR_TYPE_RGB565		(0x7 << 1)
 #define CSI_DISABLE_COMMAND_MODE	(0x0 << 4)
 #define CSI_ENABLE_COMMAND_MODE		(0x1 << 4)
 #define CSI_DISABLE_CROP		(0x0 << 5)
@@ -795,6 +846,37 @@ enum cif_reg_index {
 #define LVDS_HDR_FRAME_X2		(0x0 << 28)
 #define LVDS_HDR_FRAME_X3		(0x1 << 28)
 #define LVDS_COMPACT			(0x1 << 29)
+
+#define LVDS_ENABLE_CAPTURE_RV1106		(0x1 << 0)
+#define LVDS_MODE_RV1106(mode)			(((mode) & 0x7) << 1)
+#define LVDS_LANES_ENABLED_RV1106(lanes)	\
+	({ \
+		unsigned int mask; \
+		switch (lanes) { \
+		case 1: \
+			mask = 0x1 << 4; \
+			break; \
+		case 2: \
+			mask = 0x3 << 4; \
+			break; \
+		case 3: \
+			mask = 0x7 << 4; \
+			break; \
+		case 4: \
+			mask = 0xf << 4; \
+			break; \
+		default: \
+			mask = 0x1 << 4; \
+			break; \
+		} \
+		mask; \
+	})
+
+#define LVDS_MAIN_LANE_RV1106(index)		(((index) & 0x3) << 8)
+#define LVDS_FID_RV1106(id)			(((id) & 0x3) << 10)
+#define LVDS_HDR_FRAME_X2_RV1106		(0x0 << 12)
+#define LVDS_HDR_FRAME_X3_RV1106		(0x1 << 12)
+#define LVDS_DMAEN_RV1106			(0x1 << 15)
 
 /* CIF_CSI_INTEN */
 #define CSI_FRAME1_START_INTEN(id)	(0x1 << ((id) * 2 + 1))
@@ -899,6 +981,7 @@ enum cif_reg_index {
 #define CIF_MIPI_LVDS_SW_LVDS_WIDTH_10BITS		(0x1 << 9)
 #define CIF_MIPI_LVDS_SW_LVDS_WIDTH_12BITS		(0x2 << 9)
 #define CIF_MIPI_LVDS_SW_SEL_LVDS			(0x1 << 8)
+#define CIF_MIPI_LVDS_SW_SEL_LVDS_RV1106		(0x1 << 3)
 #define CIF_MIPI_LVDS_SW_HURRY_VALUE(val)		(((val) & 0x3) << 5)
 #define CIF_MIPI_LVDS_SW_HURRY_VALUE_RK3588(val)	(((val) & 0x7) << 5)
 #define CIF_MIPI_LVDS_SW_HURRY_ENABLE			(0x1 << 4)
@@ -938,6 +1021,11 @@ enum cif_reg_index {
 #define SW_FRM_END_ID2(x)	(((x) & CSI_FRAME_END_ID2) >> 12)
 #define SW_FRM_END_ID3(x)	(((x) & CSI_FRAME_END_ID3) >> 14)
 
+/*RV1106 SKIP FUNC*/
+#define RKCIF_CAP_SHIFT		0x18
+#define RKCIF_SKIP_SHIFT	0X15
+#define RKCIF_SKIP_EN(x)	(0x1 << (8 + x))
+
 /* CIF LVDS SAV EAV Define */
 #define SW_LVDS_EAV_ACT(code)	(((code) & 0xfff) << 16)
 #define SW_LVDS_SAV_ACT(code)	(((code) & 0xfff) << 0)
@@ -964,9 +1052,22 @@ enum cif_reg_index {
 #define RK3588_CIF_PCLK_SAMPLING_EDGE_FALLING	(0x00100010)
 #define RK3588_CIF_PCLK_SINGLE_EDGE		(0x00200000)
 #define RK3588_CIF_PCLK_DUAL_EDGE		(0x00200020)
-
+#define RV1106_CIF_GRF_VI_CON			(0x50038)
+#define RV1106_CIF_GRF_VENC_WRAPPER		(0x10008)
+#define RV1106_CIF_PCLK_SINGLE_EDGE		(0x00040000)
+#define RV1106_CIF_PCLK_DUAL_EDGE		(0x00040004)
+#define RV1106_CIF_PCLK_EDGE_RISING_M0		(0x00020002)
+#define RV1106_CIF_PCLK_EDGE_FALLING_M0		(0x00020000)
+#define RV1106_CIF_PCLK_EDGE_RISING_M1		(0x00010001)
+#define RV1106_CIF_PCLK_EDGE_FALLING_M1		(0x00010000)
+#define RV1106_CIF_GRF_SEL_M0			(0x00010000)
+#define RV1106_CIF_GRF_SEL_M1			(0x00010001)
 
 /*toisp*/
+#define TOISP_FS_CH0(index)		(0x1 << (14 + index * 3))
+#define TOISP_FS_CH1(index)		(0x1 << (15 + index * 3))
+#define TOISP_FS_CH2(index)		(0x1 << (16 + index * 3))
+
 #define TOISP_END_CH0(index)		(0x1 << (20 + index * 3))
 #define TOISP_END_CH1(index)		(0x1 << (21 + index * 3))
 #define TOISP_END_CH2(index)		(0x1 << (22 + index * 3))

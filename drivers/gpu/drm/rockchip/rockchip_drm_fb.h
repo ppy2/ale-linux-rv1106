@@ -21,6 +21,9 @@ void rockchip_drm_mode_config_init(struct drm_device *dev);
 struct drm_framebuffer *
 rockchip_drm_logo_fb_alloc(struct drm_device *dev, const struct drm_mode_fb_cmd2 *mode_cmd,
 			   struct rockchip_logo *logo);
+struct drm_framebuffer *
+rockchip_fb_alloc(struct drm_device *dev, const struct drm_mode_fb_cmd2 *mode_cmd,
+		  struct drm_gem_object **obj, unsigned int num_planes);
 
 #define to_rockchip_logo_fb(x) container_of(x, struct rockchip_drm_logo_fb, fb)
 
@@ -28,6 +31,10 @@ struct rockchip_drm_logo_fb {
 	struct drm_framebuffer fb;
 	struct rockchip_logo *logo;
 	struct rockchip_gem_object rk_obj;
+	/*
+	 * Used for delayed logo fb release
+	 */
+	struct delayed_work destroy_work;
 };
 
 #endif /* _ROCKCHIP_DRM_FB_H */

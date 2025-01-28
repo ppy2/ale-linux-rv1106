@@ -27,6 +27,11 @@
 		dsi0 = &dsi;
 		dsi1 = &dsi1;
 		ethernet0 = &gmac;
+		gpio0 = &gpio0;
+		gpio1 = &gpio1;
+		gpio2 = &gpio2;
+		gpio3 = &gpio3;
+		gpio4 = &gpio4;
 		i2c0 = &i2c0;
 		i2c1 = &i2c1;
 		i2c2 = &i2c2;
@@ -282,6 +287,7 @@
 		       <&pcie_phy 2>, <&pcie_phy 3>;
 		phy-names = "pcie-phy-0", "pcie-phy-1",
 			    "pcie-phy-2", "pcie-phy-3";
+		power-domains = <&power RK3399_PD_PERIHP>;
 		ranges = <0x83000000 0x0 0xfa000000 0x0 0xfa000000 0x0 0x1e00000
 			  0x81000000 0x0 0xfbe00000 0x0 0xfbe00000 0x0 0x100000>;
 		resets = <&cru SRST_PCIE_CORE>, <&cru SRST_PCIE_MGMT>,
@@ -428,8 +434,6 @@
 		clock-names = "ref_clk", "suspend_clk",
 			      "bus_clk", "aclk_usb3_rksoc_axi_perf",
 			      "aclk_usb3", "grf_clk";
-		resets = <&cru SRST_A_USB3_OTG0>;
-		reset-names = "usb3-otg";
 		status = "disabled";
 
 		usbdrd_dwc3_0: usb@fe800000 {
@@ -439,6 +443,8 @@
 			clocks = <&cru SCLK_USB3OTG0_REF>, <&cru ACLK_USB3OTG0>,
 				 <&cru SCLK_USB3OTG0_SUSPEND>;
 			clock-names = "ref", "bus_early", "suspend";
+			resets = <&cru SRST_A_USB3_OTG0>;
+			reset-names = "usb3-otg";
 			dr_mode = "otg";
 			phys = <&u2phy0_otg>, <&tcphy0_usb3>;
 			phy-names = "usb2-phy", "usb3-phy";
@@ -450,6 +456,8 @@
 			snps,dis_u2_susphy_quirk;
 			snps,dis-del-phy-power-chg-quirk;
 			snps,dis-tx-ipgap-linecheck-quirk;
+			snps,parkmode-disable-hs-quirk;
+			snps,parkmode-disable-ss-quirk;
 			power-domains = <&power RK3399_PD_USB3>;
 			status = "disabled";
 		};
@@ -466,8 +474,6 @@
 		clock-names = "ref_clk", "suspend_clk",
 			      "bus_clk", "aclk_usb3_rksoc_axi_perf",
 			      "aclk_usb3", "grf_clk";
-		resets = <&cru SRST_A_USB3_OTG1>;
-		reset-names = "usb3-otg";
 		status = "disabled";
 
 		usbdrd_dwc3_1: usb@fe900000 {
@@ -477,6 +483,8 @@
 			clocks = <&cru SCLK_USB3OTG1_REF>, <&cru ACLK_USB3OTG1>,
 				 <&cru SCLK_USB3OTG1_SUSPEND>;
 			clock-names = "ref", "bus_early", "suspend";
+			resets = <&cru SRST_A_USB3_OTG1>;
+			reset-names = "usb3-otg";
 			dr_mode = "otg";
 			phys = <&u2phy1_otg>, <&tcphy1_usb3>;
 			phy-names = "usb2-phy", "usb3-phy";
@@ -486,6 +494,8 @@
 			snps,dis_u2_susphy_quirk;
 			snps,dis-del-phy-power-chg-quirk;
 			snps,dis-tx-ipgap-linecheck-quirk;
+			snps,parkmode-disable-hs-quirk;
+			snps,parkmode-disable-ss-quirk;
 			power-domains = <&power RK3399_PD_USB3>;
 			status = "disabled";
 		};
@@ -1556,7 +1566,7 @@
 		};
 
 		mipi_dphy_rx0: mipi-dphy-rx0 {
-			compatible = "rockchip,rk3399-mipi-dphy-rx0";
+			compatible = "rockchip,rk3399-mipi-dphy";
 			clocks = <&cru SCLK_MIPIDPHY_REF>,
 				 <&cru SCLK_DPHY_RX0_CFG>,
 				 <&cru PCLK_VIO_GRF>;
@@ -1625,6 +1635,7 @@
 			reg = <0xf780 0x24>;
 			clocks = <&sdhci>;
 			clock-names = "emmcclk";
+			drive-impedance-ohm = <50>;
 			#phy-cells = <0>;
 			status = "disabled";
 		};
@@ -1635,7 +1646,6 @@
 			clock-names = "refclk";
 			#phy-cells = <1>;
 			resets = <&cru SRST_PCIEPHY>;
-			drive-impedance-ohm = <50>;
 			reset-names = "phy";
 			status = "disabled";
 		};
@@ -2040,10 +2050,10 @@
 		interrupts = <GIC_SPI 23 IRQ_TYPE_LEVEL_HIGH 0>;
 		clocks = <&cru PCLK_HDMI_CTRL>,
 			 <&cru SCLK_HDMI_SFR>,
-			 <&cru PLL_VPLL>,
+			 <&cru SCLK_HDMI_CEC>,
 			 <&cru PCLK_VIO_GRF>,
-			 <&cru SCLK_HDMI_CEC>;
-		clock-names = "iahb", "isfr", "vpll", "grf", "cec";
+			 <&cru PLL_VPLL>;
+		clock-names = "iahb", "isfr", "cec", "grf", "vpll";
 		power-domains = <&power RK3399_PD_HDCP>;
 		reg-io-width = <4>;
 		rockchip,grf = <&grf>;
@@ -2381,6 +2391,11 @@
 			bias-disable;
 		};
 
+		pcfg_pull_none_10ma: pcfg-pull-none-10ma {
+			bias-disable;
+			drive-strength = <10>;
+		};
+
 		pcfg_pull_none_12ma: pcfg-pull-none-12ma {
 			bias-disable;
 			drive-strength = <12>;
@@ -2409,6 +2424,11 @@
 		pcfg_pull_up_8ma: pcfg-pull-up-8ma {
 			bias-pull-up;
 			drive-strength = <8>;
+		};
+
+		pcfg_pull_up_10ma: pcfg-pull-up-10ma {
+			bias-pull-up;
+			drive-strength = <10>;
 		};
 
 		pcfg_pull_up_18ma: pcfg-pull-up-18ma {

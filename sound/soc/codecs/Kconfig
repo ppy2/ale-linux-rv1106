@@ -14,6 +14,7 @@ menu "CODEC drivers"
 config SND_SOC_ALL_CODECS
 	tristate "Build all ASoC CODEC drivers"
 	depends on COMPILE_TEST
+	imply SND_SOC_MYCODEC
 	imply SND_SOC_88PM860X
 	imply SND_SOC_L3
 	imply SND_SOC_AB8500_CODEC
@@ -304,6 +305,15 @@ config SND_SOC_ALL_CODECS
 
 	  If unsure select "N".
 
+
+config SND_SOC_AB8500_CODEC
+	tristate
+	depends on ABX500_CORE
+
+config SND_SOC_MYCODEC
+	tristate "LuckFox I2S"
+	default y if SND_SOC_ROCKCHIP_I2S_TDM=y
+
 config SND_SOC_88PM860X
 	tristate
 	depends on MFD_88PM860X
@@ -339,10 +349,6 @@ config SND_SOC_WM_ADSP
 	default m if SND_SOC_WM5102=m
 	default m if SND_SOC_WM5110=m
 	default m if SND_SOC_WM2200=m
-
-config SND_SOC_AB8500_CODEC
-	tristate
-	depends on ABX500_CORE
 
 config SND_SOC_AC97_CODEC
 	tristate "Build generic ASoC AC97 CODEC driver"

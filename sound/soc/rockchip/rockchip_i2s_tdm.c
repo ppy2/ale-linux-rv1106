@@ -30,7 +30,7 @@
 //#include "rockchip_dlp.h"
 
 //+++
-//#define DBGOUT(msg...)		do { printk(msg); } while (0)
+#define DBGOUT(msg...)		do { printk(msg); } while (0)
 //+++
 
 #define DRV_NAME "rockchip-i2s-tdm"
@@ -39,8 +39,8 @@
 #define HAVE_SYNC_RESET
 #endif
 
-#define DEFAULT_MCLK_FS				256
-#define DEFAULT_FS				48000
+#define DEFAULT_MCLK_FS				512
+#define DEFAULT_FS				44100
 #define CH_GRP_MAX				4  /* The max channel 8 / 2 */
 #define MULTIPLEX_CH_MAX			10
 #define CLK_PPM_MIN				(-1000)
